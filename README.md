@@ -28,9 +28,6 @@ The system predicts the following air quality parameters:
 * NO2
 * NOx
 * Benzene
-* PM2.5
-* PM10
-* O3
 
 ---
 
@@ -152,9 +149,6 @@ thresholds:
   no2: 40
   nox: 200
   benzene: 5
-  pm2.5: 35
-  pm10: 50
-  o3: 70
 ```
 
 Severity levels are automatically assigned based on threshold multiples.
