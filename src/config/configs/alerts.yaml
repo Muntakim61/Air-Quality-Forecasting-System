@@ -1,0 +1,28 @@
+  thresholds:
+  co:
+    low: 2.0
+    medium: 4.0
+    high: 9.0
+    unit: "mg/m³"
+    description: "Carbon Monoxide"
+  
+  no2:
+    low: 100
+    medium: 200
+    high: 400
+    unit: "µg/m³"
+    description: "Nitrogen Dioxide"
+  
+  nox:
+    low: 150
+    medium: 300
+    high: 600
+    unit: "µg/m³"
+    description: "Nitrogen Oxides"
+  
+  benzene:
+    low: 5.0
+    medium: 10.0
+    high: 20.0
+    unit: "µg/m³"
+    description: "Benzene"
