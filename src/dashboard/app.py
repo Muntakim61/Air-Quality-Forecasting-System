@@ -73,7 +73,7 @@ def create_features(df):
         df_features['day_of_week'] = df_features['DateTime'].dt.dayofweek
         df_features['month'] = df_features['DateTime'].dt.month
         df_features['day_of_year'] = df_features['DateTime'].dt.dayofyear
-        df_features['is_weekend'] = df_features['day_of_week'].isin([5, 6]).astype(int)
+        df_features['is_weekend'] = df_features['DateTime'].dt.dayofweek.isin([5, 6]).astype(int)
         
         df_features['hour_sin'] = np.sin(2 * np.pi * df_features['hour'] / 24)
         df_features['hour_cos'] = np.cos(2 * np.pi * df_features['hour'] / 24)
@@ -103,7 +103,6 @@ def create_features(df):
     df_features.rename(columns=rename_map, inplace=True)
     
     return df_features
-
 
 
 def load_alert_thresholds(): # No config_path argument needed in call
@@ -198,7 +197,7 @@ st.set_page_config(
 
 # Custom CSS
 st.markdown("""
-    
+    <style>
     .main-header {
         font-size: 2.8rem;
         color: #1f77b4;
@@ -210,12 +209,48 @@ st.markdown("""
         color: white;
         border-radius: 10px;
     }
+    /* === IMPROVED METRIC CARD STYLES === */
     .metric-card {
         background-color: #f0f2f6;
-        padding: 20px;
+        padding: 15px;
         border-radius: 10px;
-        border-left: 5px solid #1f77b4;
+        color: black;
+        min-height: 120px; /* Ensure consistent height */
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        
+        /* Layout control for responsiveness */
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
     }
+    
+    /* Dynamic Border Colors based on Pollutant */
+    .metric-card-co { border-left: 5px solid #ff4444; }
+    .metric-card-no2 { border-left: 5px solid #ffaa00; }
+    .metric-card-nox { border-left: 5px solid #2ca02c; }
+    .metric-card-benzene { border-left: 5px solid #764ba2; }
+
+    /* Internal element styling */
+    .metric-card h4 {
+        margin-top: 0;
+        margin-bottom: 5px; 
+        font-size: 1.1rem;
+    }
+
+    .metric-card .value {
+        font-size: 2.0rem; 
+        font-weight: bold;
+        margin-bottom: 5px; 
+        margin-top: 5px;
+    }
+
+    .metric-card .std-dev {
+        color: #6c757d;
+        margin-top: 0px;
+        font-size: 0.9rem;
+    }
+    /* ================================== */
+
     .alert-high {
         background-color: #ff4444;
         color: white;
@@ -248,7 +283,7 @@ st.markdown("""
         padding: 10px;
         border-radius: 5px;
     }
-    
+    </style>
 """, unsafe_allow_html=True)
 
 @st.cache_resource
@@ -265,6 +300,7 @@ def load_models():
         model_path = os.path.join(model_dir, f'{pollutant}.joblib')
         if os.path.exists(model_path):
             try:
+                # Assuming the file contains a dictionary of models, e.g., {'RandomForest': rf_model}
                 models[pollutant] = joblib.load(model_path)
             except Exception as e:
                 st.error(f"Error loading model for {pollutant}: {e}")
@@ -288,7 +324,7 @@ def make_predictions(models, X):
     for pollutant, model_dict in models.items():
         # Get predictions from each model in ensemble
         preds = []
-        for model_name, model in model_dict.items():
+        for model in model_dict.values():
             pred = model.predict(X)
             preds.append(pred)
         
@@ -303,7 +339,7 @@ def plot_pollutant_trends(predictions_df, thresholds):
         rows=2, cols=2,
         subplot_titles=('CO (Carbon Monoxide)', 'NO2 (Nitrogen Dioxide)', 
                        'NOx (Nitrogen Oxides)', 'Benzene'),
-        vertical_spacing=0.12,
+        vertical_spacing=0.20, # Increased spacing between rows for better gap
         horizontal_spacing=0.1
     )
     
@@ -356,7 +392,7 @@ def plot_pollutant_trends(predictions_df, thresholds):
             )
     
     fig.update_layout(
-        height=700,
+        height=750, # Increased height to accommodate the larger vertical spacing
         showlegend=False,
         title_text="Pollutant Forecasts with Alert Thresholds",
         title_font_size=20
@@ -368,19 +404,19 @@ def plot_pollutant_trends(predictions_df, thresholds):
     return fig
 
 def main():
-    # Header
-    st.markdown('🌍 Air Quality Forecasting & Alert System', 
+    # Header: Use the custom CSS class 'main-header'
+    st.markdown('<div class="main-header">🌍 Air Quality Forecasting & Alert System</div>', 
                 unsafe_allow_html=True)
     
     # Sidebar
-    st.sidebar.title("⚙️ System Settings")
+    st.sidebar.title("System Settings")
     st.sidebar.markdown("---")
     
     # Check if models exist
     models = load_models()
     
     if len(models) == 0:
-        st.error("⚠️ **No trained models found!**")
+        st.error("**No trained models found!**")
         st.info("""
         ### To get started:
         1. Place your raw data in `data/raw/AirQualityUCI.csv`
@@ -392,28 +428,28 @@ def main():
         """)
         return
     
-    st.sidebar.success(f"✅ {len(models)} models loaded successfully")
+    st.sidebar.success(f"{len(models)} models loaded successfully")
     st.sidebar.markdown(f"**Models:** {', '.join([m.upper() for m in models.keys()])}")
     
     # Load thresholds
     thresholds = load_alert_thresholds()
     
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📊 Alert Thresholds")
+    st.sidebar.subheader("Alert Thresholds")
     
     for pollutant, threshold in thresholds.items():
         with st.sidebar.expander(f"{pollutant.upper()}"):
             st.write(f"**Description:** {threshold.get('description', 'N/A')}")
             st.write(f"**Unit:** {threshold.get('unit', 'N/A')}")
-            st.write(f"🟢 Low: {threshold['low']}")
-            st.write(f"🟡 Medium: {threshold['medium']}")
-            st.write(f"🔴 High: {threshold['high']}")
+            st.write(f"🟢 Low: {threshold['low']} {threshold.get('unit', '')}")
+            st.write(f"🟡 Medium: {threshold['medium']} {threshold.get('unit', '')}")
+            st.write(f"🔴 High: {threshold['high']} {threshold.get('unit', '')}")
     
     # Main content
     st.markdown("---")
     
     # File upload section
-    st.subheader("📂 Upload Air Quality Data")
+    st.subheader("Upload Air Quality Data")
     
     col1, col2 = st.columns([2, 1])
     
@@ -437,10 +473,10 @@ def main():
             # Load data
             df_input = pd.read_csv(uploaded_file, sep=';')
             
-            st.success(f"✅ Successfully loaded {len(df_input)} rows")
+            st.success(f"Successfully loaded {len(df_input)} rows")
             
             # Show data preview
-            with st.expander("📊 Data Preview (First 10 Rows)", expanded=True):
+            with st.expander("View Raw Data Preview (First 10 Rows)", expanded=False):
                 st.dataframe(df_input.head(10), use_container_width=True)
             
             # Data info
@@ -452,19 +488,19 @@ def main():
             st.markdown("---")
             
             # Prediction section
-            st.subheader("🔮 Generate Predictions")
+            st.subheader("Generate Predictions")
             
             col1, col2, col3 = st.columns([1, 2, 1])
             
             with col2:
                 predict_button = st.button(
-                    "🚀 Generate Forecasts",
+                    "Generate Forecasts",
                     type="primary",
                     use_container_width=True
                 )
             
             if predict_button:
-                with st.spinner("🔄 Processing data and generating predictions..."):
+                with st.spinner("Processing data and generating predictions..."):
                     try:
                         # Prepare features
                         df_features = prepare_features(df_input)
@@ -483,10 +519,10 @@ def main():
                         st.session_state['predictions'] = predictions
                         st.session_state['df_features'] = df_features
                         
-                        st.success("✅ Predictions generated successfully!")
+                        st.success("Predictions generated successfully!")
                         
                     except Exception as e:
-                        st.error(f"❌ Error during prediction: {str(e)}")
+                        st.error(f"Error during prediction: {str(e)}")
                         st.exception(e)
             
             # Display results if predictions exist
@@ -495,51 +531,64 @@ def main():
                 df_features = st.session_state['df_features']
                 
                 st.markdown("---")
-                st.subheader("📈 Forecast Results")
+                st.subheader("Forecast Results")
                 
                 # Summary statistics
                 col1, col2, col3, col4 = st.columns(4)
                 
-                with col1:
-                    st.metric("🔴 CO", f"{predictions['co'].mean():.2f}", 
-                             delta=f"{predictions['co'].std():.2f} std")
-                with col2:
-                    st.metric("🟠 NO2", f"{predictions['no2'].mean():.2f}",
-                             delta=f"{predictions['no2'].std():.2f} std")
-                with col3:
-                    st.metric("🟢 NOx", f"{predictions['nox'].mean():.2f}",
-                             delta=f"{predictions['nox'].std():.2f} std")
-                with col4:
-                    st.metric("🟣 Benzene", f"{predictions['benzene'].mean():.2f}",
-                             delta=f"{predictions['benzene'].std():.2f} std")
+                metrics_data = {
+                    'co': ('🔴 CO (Mean)', 'metric-card-co', col1),
+                    'no2': ('🟠 NO2 (Mean)', 'metric-card-no2', col2),
+                    'nox': ('🟢 NOx (Mean)', 'metric-card-nox', col3),
+                    'benzene': ('🟣 Benzene (Mean)', 'metric-card-benzene', col4),
+                }
+
+                for pollutant, (title, css_class, col) in metrics_data.items():
+                    mean_val = predictions[pollutant].mean()
+                    std_val = predictions[pollutant].std()
+
+                    with col:
+                        # Use the new HTML structure and dynamic CSS class
+                        st.markdown(f"""
+                            <div class="metric-card {css_class}">
+                                <h4>{title}</h4>
+                                <p class="value">{mean_val:.2f}</p>
+                                <p class="std-dev">(± {std_val:.2f} std)</p>
+                            </div>
+                        """, unsafe_allow_html=True)
                 
-                # Predictions table
-                st.markdown("### 📋 Detailed Predictions")
                 
-                # Combine with datetime if available
-                if 'DateTime' in df_features.columns:
-                    display_df = pd.concat([
-                        df_features[['DateTime']].reset_index(drop=True),
-                        predictions.reset_index(drop=True)
-                    ], axis=1)
-                else:
-                    display_df = predictions.copy()
-                    display_df.insert(0, 'Index', range(len(display_df)))
+                # Separator added above the Detailed Predictions Table toggle
+                st.markdown("---")
                 
-                st.dataframe(
-                    display_df.head(50).style.format({
-                        'co': '{:.3f}',
-                        'no2': '{:.3f}',
-                        'nox': '{:.3f}',
-                        'benzene': '{:.3f}'
-                    }),
-                    use_container_width=True,
-                    height=400
-                )
+                # Detailed Predictions Table (Now Toggleable)
+                with st.expander("View Detailed Predictions Table (First 50 Samples)", expanded=False):
+                    st.markdown("### Detailed Predictions Table")
+                    
+                    # Combine with datetime if available
+                    if 'DateTime' in df_features.columns:
+                        display_df = pd.concat([
+                            df_features[['DateTime']].reset_index(drop=True),
+                            predictions.reset_index(drop=True)
+                        ], axis=1)
+                    else:
+                        display_df = predictions.copy()
+                        display_df.insert(0, 'Index', range(len(display_df)))
+                    
+                    st.dataframe(
+                        display_df.head(50).style.format({
+                            'co': '{:.3f}',
+                            'no2': '{:.3f}',
+                            'nox': '{:.3f}',
+                            'benzene': '{:.3f}'
+                        }),
+                        use_container_width=True,
+                        height=400
+                    )
                 
                 # Alert evaluation
                 st.markdown("---")
-                st.subheader("⚠️ Alert Evaluation")
+                st.subheader("Alert Evaluation")
                 
                 alerts = evaluate_alerts(predictions, thresholds)
                 
@@ -552,30 +601,16 @@ def main():
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        st.markdown(f"""
-                        
-                            {alert_counts['high']}
-                            🔴 Critical Alerts
-                        
-                        """, unsafe_allow_html=True)
+                         st.markdown(f'<div class="alert-high" style="text-align: center; border-left: 10px solid #a00;"><h3>{alert_counts["high"]}</h3><p>🔴 Critical Alerts</p></div>', unsafe_allow_html=True)
                     
                     with col2:
-                        st.markdown(f"""
-                        
-                            {alert_counts['medium']}
-                            🟠 Warning Alerts
-                        
-                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div class="alert-medium" style="text-align: center; border-left: 10px solid #d90;"><h3>{alert_counts["medium"]}</h3><p>🟠 Warning Alerts</p></div>', unsafe_allow_html=True)
                     
                     with col3:
-                        st.markdown(f"""
-                        
-                            {alert_counts['low']}
-                            🟡 Advisory Alerts
-                        
-                        """, unsafe_allow_html=True)
+                         st.markdown(f'<div class="alert-low" style="text-align: center; border-left: 10px solid #06c;"><h3>{alert_counts["low"]}</h3><p>🟡 Advisory Alerts</p></div>', unsafe_allow_html=True)
+
                     
-                    st.markdown("### 📢 Alert Messages")
+                    st.markdown("### Alert Messages")
                     
                     # Filter alerts by severity
                     severity_filter = st.selectbox(
@@ -591,7 +626,7 @@ def main():
                     for alert in filtered_alerts[:20]:  # Show first 20
                         severity_class = f"alert-{alert['severity']}"
                         st.markdown(
-                            f'{alert["message"]}',
+                            f'<div class="{severity_class}">{alert["message"]}</div>',
                             unsafe_allow_html=True
                         )
                     
@@ -602,62 +637,70 @@ def main():
                     if st.button("💾 Save Alerts to File"):
                         alert_file = save_alerts(alerts)
                         if alert_file:
-                            st.success(f"✅ Alerts saved to: `{alert_file}`")
+                            st.success(f"Alerts saved to: `{alert_file}`")
                 
                 else:
-                    st.success("✅ **All Clear!** No alerts detected - all pollutant levels are within safe limits.")
+                    st.success("**All Clear!** No alerts detected - all pollutant levels are within safe limits.")
                 
                 # Visualizations
                 st.markdown("---")
-                st.subheader("📊 Interactive Visualizations")
+                st.header("Detailed Analysis Features")
                 
-                # Plotly interactive chart
-                fig = plot_pollutant_trends(predictions, thresholds)
-                st.plotly_chart(fig, use_container_width=True)
+                # --- START OF TOGGLE SECTIONS ---
                 
-                # Distribution plots
-                st.markdown("### 📉 Pollutant Distribution Analysis")
+                # 1. Interactive Visualizations
+                with st.expander("View Interactive Pollutant Forecast Trends (Plotly)", expanded=False):
+                    st.markdown("### Interactive Visualizations")
+                    fig = plot_pollutant_trends(predictions, thresholds)
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                fig_dist, axes = plt.subplots(2, 2, figsize=(15, 10))
-                axes = axes.flatten()
-                
-                pollutants = ['co', 'no2', 'nox', 'benzene']
-                colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-                
-                for idx, (pollutant, color) in enumerate(zip(pollutants, colors)):
-                    # Histogram
-                    axes[idx].hist(predictions[pollutant], bins=30, alpha=0.7, 
-                                  color=color, edgecolor='black')
-                    axes[idx].set_title(f'{pollutant.upper()} Distribution', 
-                                       fontsize=14, fontweight='bold')
-                    axes[idx].set_xlabel('Concentration')
-                    axes[idx].set_ylabel('Frequency')
-                    axes[idx].grid(True, alpha=0.3)
+                # 2. Distribution plots
+                with st.expander("View Pollutant Distribution Analysis (Matplotlib)", expanded=False):
+                    st.markdown("### Pollutant Distribution Analysis")
                     
-                    # Add mean line
-                    mean_val = predictions[pollutant].mean()
-                    axes[idx].axvline(mean_val, color='red', linestyle='--', 
-                                     linewidth=2, label=f'Mean: {mean_val:.2f}')
-                    axes[idx].legend()
+                    fig_dist, axes = plt.subplots(2, 2, figsize=(15, 10))
+                    axes = axes.flatten()
+                    
+                    pollutants_dist = ['co', 'no2', 'nox', 'benzene']
+                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+                    
+                    for idx, (pollutant, color) in enumerate(zip(pollutants_dist, colors)):
+                        # Histogram
+                        axes[idx].hist(predictions[pollutant], bins=30, alpha=0.7, 
+                                      color=color, edgecolor='black')
+                        axes[idx].set_title(f'{pollutant.upper()} Distribution', 
+                                           fontsize=14, fontweight='bold')
+                        axes[idx].set_xlabel('Concentration')
+                        axes[idx].set_ylabel('Frequency')
+                        axes[idx].grid(True, alpha=0.3)
+                        
+                        # Add mean line
+                        mean_val = predictions[pollutant].mean()
+                        axes[idx].axvline(mean_val, color='red', linestyle='--', 
+                                         linewidth=2, label=f'Mean: {mean_val:.2f}')
+                        axes[idx].legend()
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig_dist)
                 
-                plt.tight_layout()
-                st.pyplot(fig_dist)
+                # 3. Correlation heatmap
+                with st.expander("View Pollutant Correlation Matrix (Seaborn)", expanded=False):
+                    st.markdown("### Pollutant Correlation Matrix")
+                    
+                    fig_corr, ax = plt.subplots(figsize=(10, 8))
+                    corr_matrix = predictions.corr()
+                    sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm',
+                               center=0, square=True, linewidths=1, ax=ax,
+                               cbar_kws={"shrink": 0.8})
+                    ax.set_title('Correlation Between Predicted Pollutants', 
+                                fontsize=16, fontweight='bold')
+                    st.pyplot(fig_corr)
                 
-                # Correlation heatmap
-                st.markdown("### 🔥 Pollutant Correlation Matrix")
-                
-                fig_corr, ax = plt.subplots(figsize=(10, 8))
-                corr_matrix = predictions.corr()
-                sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm',
-                           center=0, square=True, linewidths=1, ax=ax,
-                           cbar_kws={"shrink": 0.8})
-                ax.set_title('Correlation Between Predicted Pollutants', 
-                            fontsize=16, fontweight='bold')
-                st.pyplot(fig_corr)
+                # --- END OF TOGGLE SECTIONS ---
                 
                 # Download section
                 st.markdown("---")
-                st.subheader("💾 Download Results")
+                st.subheader("Download Results")
                 
                 col1, col2 = st.columns(2)
                 
@@ -689,13 +732,13 @@ def main():
                         )
         
         except Exception as e:
-            st.error(f"❌ Error loading file: {str(e)}")
+            st.error(f"Error loading file: {str(e)}")
             st.exception(e)
     
     else:
         # Show welcome message when no file is uploaded
         st.info("""
-        ### 👋 Welcome to the Air Quality Forecasting System!
+        ### Welcome to the Air Quality Forecasting System!
         
         **How to use:**
         1. Upload a CSV file with air quality data
@@ -703,10 +746,10 @@ def main():
         3. View alerts, charts, and download results
         
         **System Features:**
-        - 🤖 Ensemble ML models (RandomForest + XGBoost + LightGBM)
-        - 📊 Interactive visualizations
-        - ⚠️ Three-tier alert system (Low, Medium, High)
-        - 💾 Export predictions and alerts
+        - Ensemble ML models (RandomForest + XGBoost + LightGBM)
+        - Interactive visualizations
+        - Three-tier alert system (Low, Medium, High)
+        - Export predictions and alerts
         
         Upload your data to get started!
         """)

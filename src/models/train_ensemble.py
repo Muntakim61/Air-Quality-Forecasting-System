@@ -12,96 +12,89 @@ import sys
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from src.data_processing.load_data import load_raw_data, save_processed_data
-from src.data_processing.clean_data import clean_data
-from src.data_processing.feature_engineering import create_features
+from src.data_preprocessing.load_data import load_raw_data, save_processed_data
+from src.data_preprocessing.clean_data import clean_data
+from src.data_preprocessing.feature_engineering import create_features
 
 # Set random seed for reproducibility
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
 def train_ensemble_models(X, y, target_names, output_dir='outputs/models'):
-    """Train ensemble models for each pollutant"""
+    """Train best model per pollutant based on prior evaluation"""
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Split data
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_SEED
     )
-    
+
     results = {}
-    
+
+    # Final model mapping based on validated results
+    best_models = {
+        'co': RandomForestRegressor(
+            n_estimators=300,
+            max_depth=15,
+            random_state=RANDOM_SEED,
+            n_jobs=-1
+        ),
+        'no2': LGBMRegressor(
+            n_estimators=450,
+            learning_rate=0.05,
+            max_depth=-1,
+            random_state=RANDOM_SEED,
+            n_jobs=-1,
+            verbose=-1
+        ),
+        'nox': LGBMRegressor(
+            n_estimators=450,
+            learning_rate=0.05,
+            max_depth=-1,
+            random_state=RANDOM_SEED,
+            n_jobs=-1,
+            verbose=-1
+        ),
+        'benzene': RandomForestRegressor(
+            n_estimators=300,
+            max_depth=15,
+            random_state=RANDOM_SEED,
+            n_jobs=-1
+        )
+    }
+
     for i, target in enumerate(target_names):
         print(f"\n{'='*60}")
-        print(f"Training models for: {target.upper()}")
+        print(f"Training model for: {target.upper()}")
         print(f"{'='*60}")
-        
-        y_train_target = y_train.iloc[:, i] if isinstance(y_train, pd.DataFrame) else y_train[:, i]
-        y_test_target = y_test.iloc[:, i] if isinstance(y_test, pd.DataFrame) else y_test[:, i]
-        
-        # Initialize models
-        models = {
-            'RandomForest': RandomForestRegressor(
-                n_estimators=100, 
-                max_depth=15, 
-                random_state=RANDOM_SEED,
-                n_jobs=-1
-            ),
-            'XGBoost': XGBRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=RANDOM_SEED,
-                n_jobs=-1
-            ),
-            'LightGBM': LGBMRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=RANDOM_SEED,
-                n_jobs=-1,
-                verbose=-1
-            )
-        }
-        
-        # Train and evaluate each model
-        predictions = {}
-        for model_name, model in models.items():
-            print(f"\n  Training {model_name}...")
-            model.fit(X_train, y_train_target)
-            y_pred = model.predict(X_test)
-            predictions[model_name] = y_pred
-            
-            rmse = np.sqrt(mean_squared_error(y_test_target, y_pred))
-            r2 = r2_score(y_test_target, y_pred)
-            
-            print(f"    RMSE: {rmse:.4f}")
-            print(f"    R²:   {r2:.4f}")
-        
-        # Create ensemble prediction (average)
-        ensemble_pred = np.mean(list(predictions.values()), axis=0)
-        ensemble_rmse = np.sqrt(mean_squared_error(y_test_target, ensemble_pred))
-        ensemble_r2 = r2_score(y_test_target, ensemble_pred)
-        
-        print(f"\n  Ensemble Performance:")
-        print(f"    RMSE: {ensemble_rmse:.4f}")
-        print(f"    R²:   {ensemble_r2:.4f}")
-        
-        # Save all models for this target
-        target_models = {}
-        for model_name, model in models.items():
-            target_models[model_name] = model
-        
+
+        y_train_target = y_train.iloc[:, i]
+        y_test_target = y_test.iloc[:, i]
+
+        model = best_models[target]
+
+        print(f"\n  Training {model.__class__.__name__}...")
+        model.fit(X_train, y_train_target)
+
+        y_pred = model.predict(X_test)
+
+        rmse = np.sqrt(mean_squared_error(y_test_target, y_pred))
+        r2 = r2_score(y_test_target, y_pred)
+
+        print(f"    RMSE: {rmse:.4f}")
+        print(f"    R²:   {r2:.4f}")
+
         model_path = os.path.join(output_dir, f'{target}.joblib')
-        joblib.dump(target_models, model_path)
-        print(f"\n  ✓ Saved models to {model_path}")
-        
+        joblib.dump(model, model_path)
+
+        print(f"\n  ✓ Saved model to {model_path}")
+
         results[target] = {
-            'rmse': ensemble_rmse,
-            'r2': ensemble_r2
+            'rmse': rmse,
+            'r2': r2
         }
-    
+
     return results
+
 
 def main():
     """Main training pipeline"""
