@@ -120,7 +120,7 @@ Model training is performed offline and is not triggered by the dashboard.
 Run the training scripts after preparing processed data:
 
 ```bash
-python src/models/train_models.py
+python train_models.py
 ```
 
 This step will:
@@ -160,7 +160,7 @@ Severity levels are automatically assigned based on threshold multiples.
 Once models are trained, start the Streamlit application:
 
 ```bash
-streamlit run src/dashboard/app.py
+python -m streamlit run src/dashboard/app.py
 ```
 
 ---
