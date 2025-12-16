@@ -1,24 +1,45 @@
 import yaml
 import json
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 def load_alert_thresholds(config_path='src/config/configs/alerts.yaml'):
     """Load alert threshold configuration"""
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        return config['thresholds']
-    except Exception as e:
-        print(f"✗ Error loading alert config: {e}")
-        # Return default thresholds based on WHO and EPA standards
-        return {
-            'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0},
-            'no2': {'low': 100, 'medium': 200, 'high': 400},
-            'nox': {'low': 150, 'medium': 300, 'high': 600},
-            'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0}
-        }
+    
+    # 1. Define robust default thresholds (required fallback)
+    DEFAULT_THRESHOLDS = {
+        'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide'},
+        'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide'},
+        'nox': {'low': 150, 'medium': 300, 'high': 600, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides'},
+        'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene'}
+    }
 
+    # Use the provided path or the default
+    path_obj = Path(config_path)
+
+    if not path_obj.exists():
+        print(f"✗ Error: Alert config file not found at {config_path}. Returning default thresholds.", file=sys.stderr)
+        return DEFAULT_THRESHOLDS # Safe return
+
+    try:
+        with path_obj.open('r') as f:
+            config = yaml.safe_load(f)
+        
+        # 2. Check if the configuration is valid
+        if isinstance(config, dict) and 'thresholds' in config:
+            print("TRACE: Config loaded successfully and format is correct. Returning loaded thresholds.", file=sys.stderr)
+            return config['thresholds'] # Explicit successful return
+        else:
+            print("Warning: YAML file loaded but 'thresholds' key is missing or invalid. Returning default thresholds.", file=sys.stderr)
+            return DEFAULT_THRESHOLDS # Explicit fallback return
+            
+    except Exception as e:
+        # 3. Handle file reading/parsing errors
+        print(f"✗ Error loading alert config: {e}. Falling back to default thresholds.", file=sys.stderr)
+        return DEFAULT_THRESHOLDS
+    
 def evaluate_alerts(predictions_df, thresholds):
     """Evaluate alert levels based on predictions"""
     alerts = []

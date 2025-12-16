@@ -1,201 +1,236 @@
-import streamlit as st
+# src/dashboard/app.py
+import os
+import sys
+import json
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import joblib
-import os
-import sys
-from datetime import datetime
-import matplotlib.pyplot as plt
-import seaborn as sns
+import yaml
+import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yaml
-import json
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Inline function definitions to avoid import issues
-def clean_data(df):
-    """Clean data"""
-    df_clean = df.copy()
-    
-    if 'Date' in df_clean.columns and 'Time' in df_clean.columns:
-        
-        # --- FIX 1: Replace dots with colons in the Time column ---
-        # The time format in the source data is 18.00.00 (dots), but Pandas expects 18:00:00 (colons)
-        df_clean['Time'] = df_clean['Time'].astype(str).str.replace('.', ':', regex=False)
-        
-        datetime_series = df_clean['Date'].astype(str) + ' ' + df_clean['Time'].astype(str)
-        
-        # --- FIX 2: Specify the exact datetime format ---
-        # The original dataset uses DD/MM/YYYY, and now the time uses colons.
-        try:
-            df_clean['DateTime'] = pd.to_datetime(
-                datetime_series, 
-                format='%d/%m/%Y %H:%M:%S', # Explicitly define the DD/MM/YYYY H:M:S format
-                errors='coerce' # Set invalid dates/times to NaT
-            )
-        except Exception as e:
-            # Fallback for unexpected format errors
-            print(f"Failed to parse DateTime with explicit format. Error: {e}", file=sys.stderr)
-            df_clean['DateTime'] = pd.to_datetime(datetime_series, errors='coerce')
-        
-        df_clean.drop(['Date', 'Time'], axis=1, inplace=True)
+# =========================================================================
+# === REFACTORING: IMPORT CENTRALIZED UTILITIES (Copilot Changes) =========
+# =========================================================================
+# Note: Assuming your project structure aligns with these imports (e.g.,
+# src/data_preprocessing/clean_data.py, src/alerts/alert_manager.py, etc.)
 
-    df_clean.replace(-200, np.nan, inplace=True)
-    
-    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
-    for col in numeric_cols:
-        if df_clean[col].isnull().sum() > 0:
-            df_clean[col] = df_clean[col].ffill().bfill()
-            if df_clean[col].isnull().sum() > 0:
-                df_clean[col].fillna(df_clean[col].median(), inplace=True)
-    
-    df_clean.drop_duplicates(inplace=True)
-    
-    target_cols = ['CO(GT)', 'NOx(GT)', 'NO2(GT)', 'C6H6(GT)']
-    for col in target_cols:
-        if col in df_clean.columns:
-            Q1 = df_clean[col].quantile(0.25)
-            Q3 = df_clean[col].quantile(0.75)
-            IQR = Q3 - Q1
-            lower = Q1 - 3 * IQR
-            upper = Q3 + 3 * IQR
-            df_clean = df_clean[(df_clean[col] >= lower) & (df_clean[col] <= upper)]
-    
-    return df_clean
+# Data Preprocessing
+from src.data_preprocessing.clean_data import clean_data
+from src.data_preprocessing.feature_engineering import create_features
+# Load Data (load_raw_data not strictly needed but included for completeness)
+# from src.data_preprocessing.load_data import load_raw_data 
 
-def create_features(df):
-    """Create features"""
-    df_features = df.copy()
-    
-    if 'DateTime' in df_features.columns:
-        df_features['DateTime'] = pd.to_datetime(df_features['DateTime'])
-        df_features['hour'] = df_features['DateTime'].dt.hour
-        df_features['day_of_week'] = df_features['DateTime'].dt.dayofweek
-        df_features['month'] = df_features['DateTime'].dt.month
-        df_features['day_of_year'] = df_features['DateTime'].dt.dayofyear
-        df_features['is_weekend'] = df_features['DateTime'].dt.dayofweek.isin([5, 6]).astype(int)
-        
-        df_features['hour_sin'] = np.sin(2 * np.pi * df_features['hour'] / 24)
-        df_features['hour_cos'] = np.cos(2 * np.pi * df_features['hour'] / 24)
-        df_features['dow_sin'] = np.sin(2 * np.pi * df_features['day_of_week'] / 7)
-        df_features['dow_cos'] = np.cos(2 * np.pi * df_features['day_of_week'] / 7)
-        df_features['month_sin'] = np.sin(2 * np.pi * df_features['month'] / 12)
-        df_features['month_cos'] = np.cos(2 * np.pi * df_features['month'] / 12)
-    
-    sensor_cols = [col for col in df_features.columns if 'PT08' in col]
-    for col in sensor_cols:
-        df_features[f'{col}_lag1'] = df_features[col].shift(1)
-        df_features[f'{col}_lag2'] = df_features[col].shift(2)
-        df_features[f'{col}_rolling_mean_3'] = df_features[col].rolling(window=3, min_periods=1).mean()
-    
-    if 'T' in df_features.columns and 'RH' in df_features.columns:
-        df_features['T_RH_interaction'] = df_features['T'] * df_features['RH']
-        df_features['T_squared'] = df_features['T'] ** 2
-    
-    df_features = df_features.bfill()
-    
-    rename_map = {
-        'CO(GT)': 'co',
-        'NOx(GT)': 'nox',
-        'NO2(GT)': 'no2',
-        'C6H6(GT)': 'benzene'
-    }
-    df_features.rename(columns=rename_map, inplace=True)
-    
-    return df_features
+# Alerts Manager
+from src.alerts.alert_manager import load_alert_thresholds, evaluate_alerts, save_alerts
+# Training module (train_best_models not directly used in app.py but sometimes imported)
+# from src.models.train_ensemble import train_best_models 
+
+# =========================================================================
+# === END OF REFACTORING CHANGES ==========================================
+# =========================================================================
 
 
-def load_alert_thresholds(): # No config_path argument needed in call
-    """Load alert thresholds, returning defaults if load fails."""
+# ---------- Utility: Paths ----------
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MODEL_DIR = REPO_ROOT / "outputs" / "models"
+ALERTS_CONFIG_PATH = REPO_ROOT / "src" / "config" / "configs" / "alerts.yaml"
+ALERTS_OUTPUT_DIR = REPO_ROOT / "outputs" / "alerts"
+
+# ---------- CONSTANTS FIX: Define TARGET_COLUMNS here ----------
+TARGET_COLUMNS = ["co", "no2", "nox", "benzene"]
+# ----------------------------------------------------------------
+
+# =========================================================================
+# === REMOVED: Duplicated local `clean_data` and `create_features` =======
+# === REMOVED: Duplicated local `load_alert_thresholds` ===================
+# === REMOVED: Duplicated local `evaluate_alerts` =========================
+# === REMOVED: Duplicated local `save_alerts` =============================
+# === Functions are now imported from centralized modules. =================
+# =========================================================================
+
+
+# ---------- Fixed: load_models now finds files created by train_ensemble ----------
+@st.cache_resource
+def load_models(model_dir: Path | None = None):
+    """
+    Load trained model files from outputs/models.
     
-    # 1. Calculate the absolute path relative to the app.py file
-    script_dir = os.path.dirname(os.path.abspath(__file__)) 
-    config_path = os.path.join(script_dir, '..', 'config', 'configs', 'alerts.yaml')
-    
-    # 2. Define the COMPLETE and mandatory default thresholds
-    DEFAULT_THRESHOLDS = {
-        'co':      {'low': 4.0, 'medium': 7.0, 'high': 10.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide'},
-        'no2':     {'low': 100, 'medium': 150, 'high': 200, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide'},
-        'nox':     {'low': 150, 'medium': 250, 'high': 350, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides'},
-        'benzene': {'low': 1.5, 'medium': 3.0, 'high': 5.0, 'unit': 'µg/m³', 'description': 'Benzene'}
-    }
-    
-    try:
-        # 3. Attempt to load using the absolute path
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        if config and 'thresholds' in config:
-             # Ensure the loaded config is itself a dictionary
-             if isinstance(config['thresholds'], dict):
-                 return config['thresholds']
-             else:
-                 print("!!! YAML LOADED BUT 'thresholds' IS NOT A DICTIONARY. FALLING BACK !!!", file=sys.stderr)
-                 return DEFAULT_THRESHOLDS
+    Returns: dict[pollutant] -> dict[model_name] = model_object
+    """
+    models = {}
+    md = Path(model_dir) if model_dir else MODEL_DIR
+    if not md.exists():
+        return models
+
+    for file in md.glob("*.joblib"):
+        stem = file.stem 
+        parts = stem.split("_", 1)
+        if len(parts) == 2:
+            pollutant, model_name = parts
         else:
-             print("!!! YAML LOADED BUT MISSING 'thresholds' KEY. FALLING BACK !!!", file=sys.stderr)
-             return DEFAULT_THRESHOLDS
-             
-    except Exception as e:
-        # 4. Fallback is guaranteed here for File Not Found or YAML parsing errors.
-        print(f"!!! FILE LOAD FAILED: {config_path}. FALLING BACK TO DEFAULTS. Error: {e} !!!", file=sys.stderr)
-        return DEFAULT_THRESHOLDS
-    
+            # Fallback for models without an explicit name (e.g., just 'co.joblib')
+            pollutant, model_name = parts[0], parts[0] 
+        try:
+            mdl = joblib.load(file)
+            # Old app.py expects models[pollutant] to be a dictionary of models (ensemble),
+            # so we ensure it's a dict even if only one model is loaded.
+            models.setdefault(pollutant, {})[model_name] = mdl 
+        except Exception as e:
+            print(f"Warning: failed to load model file {file}: {e}", file=sys.stderr)
 
-def evaluate_alerts(predictions_df, thresholds):
-    """Evaluate alerts"""
-    alerts = []
-    
-    for idx, row in predictions_df.iterrows():
-        for pollutant, value in row.items():
-            if pollutant in thresholds:
-                threshold = thresholds[pollutant]
-                
-                if value >= threshold['high']:
-                    severity = 'high'
-                    message = f"🔴 CRITICAL: {pollutant.upper()} level {value:.2f} exceeds high threshold ({threshold['high']})"
-                elif value >= threshold['medium']:
-                    severity = 'medium'
-                    message = f"🟠 WARNING: {pollutant.upper()} level {value:.2f} exceeds medium threshold ({threshold['medium']})"
-                elif value >= threshold['low']:
-                    severity = 'low'
-                    message = f"🟡 ADVISORY: {pollutant.upper()} level {value:.2f} exceeds low threshold ({threshold['low']})"
-                else:
-                    continue
-                
-                alerts.append({
-                    'timestamp': datetime.now().isoformat(),
-                    'index': int(idx),
-                    'pollutant': pollutant,
-                    'value': float(value),
-                    'severity': severity,
-                    'message': message
-                })
-    
-    return alerts
+    return models
 
-def save_alerts(alerts, output_dir='outputs/alerts'):
-    """Save alerts"""
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    file_path = os.path.join(output_dir, f'alerts_{timestamp}.json')
+
+# ---------- Model prediction helpers (No changes here) ----------
+def _expected_feature_names(model) -> list | None:
     
+    # sklearn
+    if hasattr(model, "feature_names_in_"):
+        return list(getattr(model, "feature_names_in_"))
+    # lightgbm
+    if hasattr(model, "feature_name_"):
+        return list(getattr(model, "feature_name_"))
+    # lightgbm Booster
     try:
-        with open(file_path, 'w') as f:
-            json.dump(alerts, f, indent=2)
-        return file_path
-    except:
-        return None
+        if hasattr(model, "booster_"):
+            feat = model.booster_.feature_name()
+            return list(feat)
+    except Exception:
+        pass
+    # fallback: None
+    return None
 
-# Page config
-st.set_page_config(
-    page_title="Air Quality Forecasting System",
-    page_icon="🌍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
-# Custom CSS
+def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
+    
+    preds = {}
+    for pollutant, model_dict in models.items():
+        preds_list = []
+        for name, mdl in model_dict.items():
+            try:
+                expected = _expected_feature_names(mdl)
+                if expected is not None:
+                    # Reindex X to match training features: missing -> fill 0, extra -> dropped
+                    X_model = X.reindex(columns=expected)
+                    # Fill any missing columns with zeros and ensure numeric dtype
+                    X_model = X_model.fillna(0).astype(float)
+                else:
+                    # If we can't get expected names, try to use numeric columns ordered as-is
+                    X_model = X.select_dtypes(include=[np.number]).fillna(0).astype(float)
+
+                # Predict
+                p = mdl.predict(X_model)
+                preds_list.append(np.asarray(p).reshape(-1))
+            except Exception as e:
+                print(f"Warning: model {name} for {pollutant} failed to predict: {e}", file=sys.stderr)
+                # continue to next model
+
+        if preds_list:
+            arr = np.vstack(preds_list)  # shape (n_models, n_samples)
+            # compute mean across models but avoid warnings when columns are all-NaN
+            with np.errstate(invalid="ignore"):
+                avg = np.nanmean(arr, axis=0)
+            # where all entries are nan, set result to nan explicitly (nanmean gives nan but may warn)
+            all_nan_mask = np.all(np.isnan(arr), axis=0)
+            if all_nan_mask.any():
+                avg[all_nan_mask] = np.nan
+            preds[pollutant] = avg
+    if not preds:
+        return pd.DataFrame()
+    return pd.DataFrame(preds)
+
+
+# --- Plotting function (using the old app.py's detailed version for UI match) ---
+def plot_pollutant_trends(predictions_df, thresholds):
+    """Create interactive plotly charts for pollutants including thresholds"""
+    
+    # Ensure all required pollutants are in the predictions_df, filling with NaN if missing
+    pollutants = TARGET_COLUMNS
+    for p in pollutants:
+        if p not in predictions_df.columns:
+            predictions_df[p] = np.nan
+            
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('CO (Carbon Monoxide)', 'NO2 (Nitrogen Dioxide)', 
+                       'NOx (Nitrogen Oxides)', 'Benzene'),
+        vertical_spacing=0.20,
+        horizontal_spacing=0.1
+    )
+    
+    positions = [(1,1), (1,2), (2,1), (2,2)]
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    
+    for idx, (pollutant, pos, color) in enumerate(zip(pollutants, positions, colors)):
+        # Main prediction line
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(predictions_df))),
+                y=predictions_df[pollutant],
+                name=pollutant.upper(),
+                line=dict(color=color, width=2),
+                showlegend=True
+            ),
+            row=pos[0], col=pos[1]
+        )
+        
+        # Threshold lines
+        if pollutant in thresholds:
+            threshold = thresholds[pollutant]
+            
+            # High threshold
+            fig.add_hline(
+                y=threshold['high'],
+                line_dash="dash",
+                line_color="red",
+                annotation_text="High",
+                row=pos[0], col=pos[1],
+                annotation_position="top left"
+            )
+            
+            # Medium threshold
+            fig.add_hline(
+                y=threshold['medium'],
+                line_dash="dash",
+                line_color="orange",
+                annotation_text="Medium",
+                row=pos[0], col=pos[1],
+                annotation_position="bottom left"
+            )
+            
+            # Low threshold
+            fig.add_hline(
+                y=threshold['low'],
+                line_dash="dash",
+                line_color="yellow",
+                annotation_text="Low",
+                row=pos[0], col=pos[1],
+                annotation_position="top right"
+            )
+    
+    fig.update_layout(
+        height=750,
+        showlegend=False,
+        title_text="Pollutant Forecasts with Alert Thresholds",
+        title_font_size=20
+    )
+    
+    fig.update_xaxes(title_text="Sample Index")
+    fig.update_yaxes(title_text="Concentration")
+    
+    return fig
+
+
+# ---------- Streamlit UI ----------
+
+# Custom CSS for the old app.py look
 st.markdown("""
     <style>
     .main-header {
@@ -286,157 +321,78 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def load_models():
-    """Load trained models"""
-    models = {}
-    model_dir = 'outputs/models'
-    target_pollutants = ['co', 'no2', 'nox', 'benzene']
-    
-    if not os.path.exists(model_dir):
-        return models
-    
-    for pollutant in target_pollutants:
-        model_path = os.path.join(model_dir, f'{pollutant}.joblib')
-        if os.path.exists(model_path):
-            try:
-                # Assuming the file contains a dictionary of models, e.g., {'RandomForest': rf_model}
-                models[pollutant] = joblib.load(model_path)
-            except Exception as e:
-                st.error(f"Error loading model for {pollutant}: {e}")
-    
-    return models
+st.set_page_config(
+    page_title="Air Quality Forecasting System",
+    page_icon="🌍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-def prepare_features(df):
-    """Prepare features from uploaded data matching training pipeline"""
-    # Clean data
-    df_clean = clean_data(df)
+def display_alerts(alerts):
+    """Display alerts using custom CSS classes"""
+    st.subheader(f"⚠️ Generated Alerts ({len(alerts)})")
     
-    # Create features
-    df_features = create_features(df_clean)
-    
-    return df_features
+    # Use st.expander for a cleaner look
+    with st.expander("View Detailed Alerts", expanded=True):
+        if not alerts:
+            st.info("No elevated alerts were triggered.")
+            return
 
-def make_predictions(models, X):
-    """Generate ensemble predictions"""
-    predictions = {}
-    
-    for pollutant, model_dict in models.items():
-        # Get predictions from each model in ensemble
-        preds = []
-        for model in model_dict.values():
-            pred = model.predict(X)
-            preds.append(pred)
-        
-        # Ensemble average
-        predictions[pollutant] = np.mean(preds, axis=0)
-    
-    return pd.DataFrame(predictions)
+        for alert in alerts:
+            severity_class = f"alert-{alert['severity']}"
+            st.markdown(
+                f'<div class="{severity_class}">{alert["message"]}</div>', 
+                unsafe_allow_html=True
+            )
 
-def plot_pollutant_trends(predictions_df, thresholds):
-    """Create interactive plotly charts for pollutants"""
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('CO (Carbon Monoxide)', 'NO2 (Nitrogen Dioxide)', 
-                       'NOx (Nitrogen Oxides)', 'Benzene'),
-        vertical_spacing=0.20, # Increased spacing between rows for better gap
-        horizontal_spacing=0.1
-    )
-    
-    pollutants = ['co', 'no2', 'nox', 'benzene']
-    positions = [(1,1), (1,2), (2,1), (2,2)]
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-    
-    for idx, (pollutant, pos, color) in enumerate(zip(pollutants, positions, colors)):
-        # Main prediction line
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(predictions_df))),
-                y=predictions_df[pollutant],
-                name=pollutant.upper(),
-                line=dict(color=color, width=2),
-                showlegend=True
-            ),
-            row=pos[0], col=pos[1]
-        )
-        
-        # Threshold lines
-        if pollutant in thresholds:
-            threshold = thresholds[pollutant]
-            
-            # High threshold
-            fig.add_hline(
-                y=threshold['high'],
-                line_dash="dash",
-                line_color="red",
-                annotation_text="High",
-                row=pos[0], col=pos[1]
-            )
-            
-            # Medium threshold
-            fig.add_hline(
-                y=threshold['medium'],
-                line_dash="dash",
-                line_color="orange",
-                annotation_text="Medium",
-                row=pos[0], col=pos[1]
-            )
-            
-            # Low threshold
-            fig.add_hline(
-                y=threshold['low'],
-                line_dash="dash",
-                line_color="yellow",
-                annotation_text="Low",
-                row=pos[0], col=pos[1]
-            )
-    
-    fig.update_layout(
-        height=750, # Increased height to accommodate the larger vertical spacing
-        showlegend=False,
-        title_text="Pollutant Forecasts with Alert Thresholds",
-        title_font_size=20
-    )
-    
-    fig.update_xaxes(title_text="Sample Index")
-    fig.update_yaxes(title_text="Concentration")
-    
-    return fig
 
 def main():
     # Header: Use the custom CSS class 'main-header'
     st.markdown('<div class="main-header">🌍 Air Quality Forecasting & Alert System</div>', 
                 unsafe_allow_html=True)
     
-    # Sidebar
+    # Sidebar Setup
     st.sidebar.title("System Settings")
     st.sidebar.markdown("---")
-    
-    # Check if models exist
+
+    # Load models
     models = load_models()
     
-    if len(models) == 0:
+    if not models:
         st.error("**No trained models found!**")
-        st.info("""
+        st.info(f"""
         ### To get started:
         1. Place your raw data in `data/raw/AirQualityUCI.csv`
         2. Run the training script:
         ```bash
         python src/models/train_ensemble.py
         ```
-        3. Refresh this dashboard
+        3. Refresh this dashboard.
         """)
         return
     
-    st.sidebar.success(f"{len(models)} models loaded successfully")
-    st.sidebar.markdown(f"**Models:** {', '.join([m.upper() for m in models.keys()])}")
+    # Sidebar: Model Info
+    st.sidebar.success(f"{sum(len(v) for v in models.values())} model files loaded")
+    st.sidebar.markdown(f"**Pollutants:** {', '.join([m.upper() for m in models.keys()])}")
     
-    # Load thresholds
-    thresholds = load_alert_thresholds()
+    # Load thresholds (Now using the imported centralized function)
+    # The imported function should handle the ALERTS_CONFIG_PATH logic internally
+    thresholds = load_alert_thresholds() 
+    print(f"DEBUG: Value of 'thresholds' loaded in app.py: {thresholds}")
     
+    # === CRITICAL FIX: Ensure 'thresholds' is a dictionary for the UI loop ===
+    if thresholds is None:
+        st.error("Error: Could not load alert thresholds from file. Using hardcoded defaults.")
+        # Provide a hardcoded dictionary structure to prevent the crash
+        thresholds = { 
+            'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide (Default)'},
+            'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide (Default)'},
+            'nox': {'low': 150, 'medium': 300, 'high': 600, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides (Default)'},
+            'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene (Default)'}
+        }
+    # Sidebar: Alert Thresholds
     st.sidebar.markdown("---")
     st.sidebar.subheader("Alert Thresholds")
-    
     for pollutant, threshold in thresholds.items():
         with st.sidebar.expander(f"{pollutant.upper()}"):
             st.write(f"**Description:** {threshold.get('description', 'N/A')}")
@@ -444,18 +400,18 @@ def main():
             st.write(f"🟢 Low: {threshold['low']} {threshold.get('unit', '')}")
             st.write(f"🟡 Medium: {threshold['medium']} {threshold.get('unit', '')}")
             st.write(f"🔴 High: {threshold['high']} {threshold.get('unit', '')}")
-    
-    # Main content
+
     st.markdown("---")
-    
-    # File upload section
+
+    # Main Content: File Upload and Info
     st.subheader("Upload Air Quality Data")
     
     col1, col2 = st.columns([2, 1])
-    
+    uploaded_file = None
+
     with col1:
         uploaded_file = st.file_uploader(
-            "Upload CSV file with air quality measurements",
+            "Upload CSV file with raw air quality measurements",
             type=['csv'],
             help="File should contain columns: Date, Time, sensor readings, etc."
         )
@@ -467,246 +423,167 @@ def main():
         - Sensor readings (PT08.S1, etc.)
         - Temperature (T), Humidity (RH)
         """)
-    
-    if uploaded_file is not None:
+
+    if uploaded_file is None:
+        st.info("Upload raw dataset CSV to generate predictions.")
+        return
+
+    # Load and process data (now outside the button click for metric display)
+    try:
+        # Try different separators to match the old app.py robustness (sep=None/python engine, then default)
         try:
-            # Load data
-            df_input = pd.read_csv(uploaded_file, sep=';')
-            
-            st.success(f"Successfully loaded {len(df_input)} rows")
-            
-            # Show data preview
-            with st.expander("View Raw Data Preview (First 10 Rows)", expanded=False):
-                st.dataframe(df_input.head(10), use_container_width=True)
-            
-            # Data info
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Rows", len(df_input))
-            col2.metric("Total Columns", len(df_input.columns))
-            col3.metric("Memory Usage", f"{df_input.memory_usage(deep=True).sum() / 1024:.2f} KB")
-            
-            st.markdown("---")
-            
-            # Prediction section
-            st.subheader("Generate Predictions")
-            
-            col1, col2, col3 = st.columns([1, 2, 1])
-            
-            with col2:
-                predict_button = st.button(
-                    "Generate Forecasts",
-                    type="primary",
-                    use_container_width=True
-                )
-            
-            if predict_button:
-                with st.spinner("Processing data and generating predictions..."):
-                    try:
-                        # Prepare features
-                        df_features = prepare_features(df_input)
-                        
-                        # Get feature columns (exclude targets and datetime)
-                        target_cols = ['co', 'no2', 'nox', 'benzene']
-                        exclude_cols = target_cols + ['DateTime']
-                        feature_cols = [col for col in df_features.columns if col not in exclude_cols]
-                        
-                        X = df_features[feature_cols]
-                        
-                        # Make predictions
-                        predictions = make_predictions(models, X)
-                        
-                        # Store in session state
-                        st.session_state['predictions'] = predictions
-                        st.session_state['df_features'] = df_features
-                        
-                        st.success("Predictions generated successfully!")
-                        
-                    except Exception as e:
-                        st.error(f"Error during prediction: {str(e)}")
-                        st.exception(e)
-            
-            # Display results if predictions exist
-            if 'predictions' in st.session_state:
-                predictions = st.session_state['predictions']
-                df_features = st.session_state['df_features']
-                
-                st.markdown("---")
-                st.subheader("Forecast Results")
-                
-                # Summary statistics
-                col1, col2, col3, col4 = st.columns(4)
-                
-                metrics_data = {
-                    'co': ('🔴 CO (Mean)', 'metric-card-co', col1),
-                    'no2': ('🟠 NO2 (Mean)', 'metric-card-no2', col2),
-                    'nox': ('🟢 NOx (Mean)', 'metric-card-nox', col3),
-                    'benzene': ('🟣 Benzene (Mean)', 'metric-card-benzene', col4),
-                }
+            df_input = pd.read_csv(uploaded_file, sep=None, engine="python")
+        except Exception:
+            df_input = pd.read_csv(uploaded_file)
+    except Exception as e:
+        st.error(f"Error loading CSV: {e}")
+        return
 
-                for pollutant, (title, css_class, col) in metrics_data.items():
-                    mean_val = predictions[pollutant].mean()
-                    std_val = predictions[pollutant].std()
+    st.success(f"Successfully loaded {len(df_input)} rows")
+    
+    # Show data preview
+    with st.expander("View Raw Data Preview (First 10 Rows)", expanded=False):
+        st.dataframe(df_input.head(10), use_container_width=True)
+    
+    # Data metrics
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Rows", len(df_input))
+    col2.metric("Total Columns", len(df_input.columns))
+    # Calculate and display memory usage (matches old app.py)
+    mem_usage = df_input.memory_usage(deep=True).sum() / 1024
+    col3.metric("Memory Usage", f"{mem_usage:.2f} KB")
+    
+    st.markdown("---")
+    
+    # Prediction Section
+    st.subheader("Generate Predictions")
+    
+    col_pred_left, col_pred_center, col_pred_right = st.columns([1, 2, 1])
+    
+    with col_pred_center:
+        predict_button = st.button(
+            "Generate Forecasts",
+            type="primary",
+            use_container_width=True
+        )
 
-                    with col:
-                        # Use the new HTML structure and dynamic CSS class
-                        st.markdown(f"""
-                            <div class="metric-card {css_class}">
-                                <h4>{title}</h4>
-                                <p class="value">{mean_val:.2f}</p>
-                                <p class="std-dev">(± {std_val:.2f} std)</p>
-                            </div>
-                        """, unsafe_allow_html=True)
+    # Prediction Logic
+    if predict_button:
+        with st.spinner("Processing data and generating predictions..."):
+            try:
+                # 1. Preprocess data (Now using the imported centralized functions)
+                df_features = clean_data(df_input)
+                df_features = create_features(df_features)
+
+                # 2. Prepare features for prediction
+                X = df_features.select_dtypes(include=[np.number]).copy()
                 
+                # --- FIX: Drop target columns using the now-defined global constant ---
+                for t in TARGET_COLUMNS:
+                    if t in X.columns:
+                        X = X.drop(columns=[t])
+                # ---------------------------------------------------------------------
                 
-                # Separator added above the Detailed Predictions Table toggle
-                st.markdown("---")
+                if X.shape[0] == 0:
+                    st.error("No numeric feature columns available after preprocessing.")
+                    return
+
+                # 3. Make predictions
+                preds_df = make_predictions(models, X)
                 
-                # Detailed Predictions Table (Now Toggleable)
-                with st.expander("View Detailed Predictions Table (First 50 Samples)", expanded=False):
-                    st.markdown("### Detailed Predictions Table")
-                    
-                    # Combine with datetime if available
-                    if 'DateTime' in df_features.columns:
-                        display_df = pd.concat([
-                            df_features[['DateTime']].reset_index(drop=True),
-                            predictions.reset_index(drop=True)
-                        ], axis=1)
-                    else:
-                        display_df = predictions.copy()
-                        display_df.insert(0, 'Index', range(len(display_df)))
-                    
-                    st.dataframe(
-                        display_df.head(50).style.format({
-                            'co': '{:.3f}',
-                            'no2': '{:.3f}',
-                            'nox': '{:.3f}',
-                            'benzene': '{:.3f}'
-                        }),
-                        use_container_width=True,
-                        height=400
-                    )
+                if preds_df.empty:
+                    st.error("No predictions produced by loaded models.")
+                    return
+
+                # 4. Evaluation and Display
+                st.success("Predictions generated")
                 
-                # Alert evaluation
-                st.markdown("---")
-                st.subheader("Alert Evaluation")
+                # Show predictions dataframe
+                st.markdown("#### Forecast Data Preview")
+                st.dataframe(preds_df.head(20), use_container_width=True)
                 
-                alerts = evaluate_alerts(predictions, thresholds)
-                
+                # 5. Alert Generation and Display (Now using the imported centralized functions)
+                alerts = evaluate_alerts(preds_df, thresholds)
                 if alerts:
-                    # Alert summary
-                    alert_counts = {'high': 0, 'medium': 0, 'low': 0}
-                    for alert in alerts:
-                        alert_counts[alert['severity']] += 1
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                         st.markdown(f'<div class="alert-high" style="text-align: center; border-left: 10px solid #a00;"><h3>{alert_counts["high"]}</h3><p>🔴 Critical Alerts</p></div>', unsafe_allow_html=True)
-                    
-                    with col2:
-                        st.markdown(f'<div class="alert-medium" style="text-align: center; border-left: 10px solid #d90;"><h3>{alert_counts["medium"]}</h3><p>🟠 Warning Alerts</p></div>', unsafe_allow_html=True)
-                    
-                    with col3:
-                         st.markdown(f'<div class="alert-low" style="text-align: center; border-left: 10px solid #06c;"><h3>{alert_counts["low"]}</h3><p>🟡 Advisory Alerts</p></div>', unsafe_allow_html=True)
-
-                    
-                    st.markdown("### Alert Messages")
-                    
-                    # Filter alerts by severity
-                    severity_filter = st.selectbox(
-                        "Filter by severity:",
-                        options=['All', 'High', 'Medium', 'Low']
-                    )
-                    
-                    filtered_alerts = alerts
-                    if severity_filter != 'All':
-                        filtered_alerts = [a for a in alerts if a['severity'] == severity_filter.lower()]
-                    
-                    # Display alerts
-                    for alert in filtered_alerts[:20]:  # Show first 20
-                        severity_class = f"alert-{alert['severity']}"
-                        st.markdown(
-                            f'<div class="{severity_class}">{alert["message"]}</div>',
-                            unsafe_allow_html=True
-                        )
-                    
-                    if len(filtered_alerts) > 20:
-                        st.info(f"Showing 20 of {len(filtered_alerts)} alerts")
-                    
-                    # Save alerts
-                    if st.button("💾 Save Alerts to File"):
-                        alert_file = save_alerts(alerts)
-                        if alert_file:
-                            st.success(f"Alerts saved to: `{alert_file}`")
-                
+                    # save_alerts is now the imported function
+                    out_path = save_alerts(alerts, output_dir=ALERTS_OUTPUT_DIR) 
+                    display_alerts(alerts) # Use the custom display function
                 else:
-                    st.success("**All Clear!** No alerts detected - all pollutant levels are within safe limits.")
+                    st.info("No alerts generated for the prediction batch.")
+
+                # --- START OF NEW VISUALIZATIONS AND DOWNLOAD SECTIONS ---
                 
-                # Visualizations
                 st.markdown("---")
                 st.header("Detailed Analysis Features")
                 
-                # --- START OF TOGGLE SECTIONS ---
-                
-                # 1. Interactive Visualizations
+                # 1. Interactive Visualizations (Plotly Trends)
                 with st.expander("View Interactive Pollutant Forecast Trends (Plotly)", expanded=False):
                     st.markdown("### Interactive Visualizations")
-                    fig = plot_pollutant_trends(predictions, thresholds)
+                    # Note: Using preds_df
+                    fig = plot_pollutant_trends(preds_df, thresholds) 
                     st.plotly_chart(fig, use_container_width=True)
                 
-                # 2. Distribution plots
+                # 2. Distribution plots (Matplotlib)
                 with st.expander("View Pollutant Distribution Analysis (Matplotlib)", expanded=False):
                     st.markdown("### Pollutant Distribution Analysis")
                     
+                    # Create the figure for Matplotlib/Seaborn
                     fig_dist, axes = plt.subplots(2, 2, figsize=(15, 10))
                     axes = axes.flatten()
                     
-                    pollutants_dist = ['co', 'no2', 'nox', 'benzene']
-                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+                    pollutants_dist = TARGET_COLUMNS
+                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'] # Consistent colors
                     
                     for idx, (pollutant, color) in enumerate(zip(pollutants_dist, colors)):
+                        # Check if pollutant exists in predictions
+                        if pollutant not in preds_df.columns:
+                             axes[idx].set_title(f'{pollutant.upper()} - Data Missing', fontsize=14)
+                             # Set axis limits to ensure blank plots are consistent
+                             axes[idx].set_xlim(0, 1) 
+                             axes[idx].set_ylim(0, 1)
+                             continue
+                             
                         # Histogram
-                        axes[idx].hist(predictions[pollutant], bins=30, alpha=0.7, 
-                                      color=color, edgecolor='black')
+                        # Use dropna() for the distribution plot to handle potential NaNs
+                        axes[idx].hist(preds_df[pollutant].dropna(), bins=30, alpha=0.7, 
+                                       color=color, edgecolor='black')
                         axes[idx].set_title(f'{pollutant.upper()} Distribution', 
-                                           fontsize=14, fontweight='bold')
+                                            fontsize=14, fontweight='bold')
                         axes[idx].set_xlabel('Concentration')
                         axes[idx].set_ylabel('Frequency')
                         axes[idx].grid(True, alpha=0.3)
                         
                         # Add mean line
-                        mean_val = predictions[pollutant].mean()
+                        mean_val = preds_df[pollutant].mean()
                         axes[idx].axvline(mean_val, color='red', linestyle='--', 
-                                         linewidth=2, label=f'Mean: {mean_val:.2f}')
+                                          linewidth=2, label=f'Mean: {mean_val:.2f}')
                         axes[idx].legend()
                     
                     plt.tight_layout()
-                    st.pyplot(fig_dist)
+                    st.pyplot(fig_dist) # Display Matplotlib figure
                 
-                # 3. Correlation heatmap
+                # 3. Correlation heatmap (Seaborn)
                 with st.expander("View Pollutant Correlation Matrix (Seaborn)", expanded=False):
                     st.markdown("### Pollutant Correlation Matrix")
                     
                     fig_corr, ax = plt.subplots(figsize=(10, 8))
-                    corr_matrix = predictions.corr()
+                    corr_matrix = preds_df.corr() # Note: Using preds_df
                     sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm',
-                               center=0, square=True, linewidths=1, ax=ax,
-                               cbar_kws={"shrink": 0.8})
+                                center=0, square=True, linewidths=1, ax=ax,
+                                cbar_kws={"shrink": 0.8})
                     ax.set_title('Correlation Between Predicted Pollutants', 
-                                fontsize=16, fontweight='bold')
-                    st.pyplot(fig_corr)
-                
-                # --- END OF TOGGLE SECTIONS ---
+                                 fontsize=16, fontweight='bold')
+                    st.pyplot(fig_corr) # Display Seaborn plot
                 
                 # Download section
                 st.markdown("---")
                 st.subheader("Download Results")
                 
-                col1, col2 = st.columns(2)
-                
-                with col1:
+                col1_dl, col2_dl = st.columns(2) 
+
+                with col1_dl:
                     # Download predictions
-                    csv = predictions.to_csv(index=False)
+                    csv = preds_df.to_csv(index=False) # Note: Using preds_df
                     st.download_button(
                         label="📥 Download Predictions CSV",
                         data=csv,
@@ -715,12 +592,12 @@ def main():
                         use_container_width=True
                     )
                 
-                with col2:
+                with col2_dl:
                     # Download full results with datetime
-                    if 'DateTime' in df_features.columns:
+                    if 'DateTime' in df_features.columns: # df_features still holds the DateTime column
                         full_results = pd.concat([
                             df_features[['DateTime']].reset_index(drop=True),
-                            predictions.reset_index(drop=True)
+                            preds_df.reset_index(drop=True)
                         ], axis=1)
                         csv_full = full_results.to_csv(index=False)
                         st.download_button(
@@ -730,29 +607,15 @@ def main():
                             mime="text/csv",
                             use_container_width=True
                         )
-        
-        except Exception as e:
-            st.error(f"Error loading file: {str(e)}")
-            st.exception(e)
-    
-    else:
-        # Show welcome message when no file is uploaded
-        st.info("""
-        ### Welcome to the Air Quality Forecasting System!
-        
-        **How to use:**
-        1. Upload a CSV file with air quality data
-        2. Click 'Generate Forecasts' to predict pollutant levels
-        3. View alerts, charts, and download results
-        
-        **System Features:**
-        - Ensemble ML models (RandomForest + XGBoost + LightGBM)
-        - Interactive visualizations
-        - Three-tier alert system (Low, Medium, High)
-        - Export predictions and alerts
-        
-        Upload your data to get started!
-        """)
+                    else:
+                        st.info("Timestamped results not available (DateTime column missing).")
+                
+                # --- END OF NEW VISUALIZATIONS AND DOWNLOAD SECTIONS ---
 
-if __name__ == '__main__':
+            except Exception as e:
+                # Catch any unexpected errors during the prediction path
+                st.error(f"An error occurred during prediction: {e}")
+
+
+if __name__ == "__main__":
     main()
