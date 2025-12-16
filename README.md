@@ -141,7 +141,7 @@ pip install -r requirements.txt
 Model training is performed offline. Prepare processed data, then run:
 
 ```bash
-python src/models/train_ensemble.py
+python train_models.py
 ```
 
 What this does:
