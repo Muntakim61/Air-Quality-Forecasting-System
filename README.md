@@ -18,7 +18,7 @@ The codebase separates offline training from online prediction: models are train
 - Centralized, shared data preprocessing pipeline (`src/data_preprocessing`)
 - Consistent feature engineering used by both training and dashboard
 - Multi-output regression for multiple pollutants
-- Support for RandomForest, LightGBM (and XGBoost if added)
+- Support for RandomForest, LightGBM and XGBoost
 - Configurable alert thresholds with severity levels (`src/alerts/alert_manager.py`)
 - Streamlit dashboard (`src/dashboard/app.py`) for CSV upload, prediction, visualizations, and alerts
 - JSON-based alert logging to `outputs/alerts/`
@@ -145,7 +145,7 @@ python train_models.py
 ```
 
 What this does:
-- Trains a final model per pollutant (RandomForest / LightGBM)
+- Trains a final model per pollutant (RandomForest / LightGBM / XGBoost)
 - Evaluates using RMSE and R²
 - Saves trained model files to `outputs/models/` as `.joblib`
 
@@ -175,26 +175,20 @@ thresholds:
     low: 40
     medium: 100
     high: 200
+    unit: "µg/m³"
+    description: "Nitrogen Dioxide"
   nox:
     low: 150
     medium: 250
     high: 350
+    unit: "µg/m³"
+    description: "Nitrogen Oxides"
   benzene:
     low: 1.5
     medium: 3.0
     high: 5.0
-  pm2.5:
-    low: 25
-    medium: 35
-    high: 55
-  pm10:
-    low: 40
-    medium: 50
-    high: 100
-  o3:
-    low: 50
-    medium: 70
-    high: 120
+    unit: "µg/m³"
+    description: "Benzene"
 ```
 
 `src/alerts/alert_manager.py` provides robust loading and fallback defaults.
