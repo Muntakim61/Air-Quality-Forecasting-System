@@ -1,4 +1,3 @@
-# train_models.py - entrypoint using src.config.settings for paths
 import sys
 import os
 from pathlib import Path
@@ -11,7 +10,6 @@ from src.config import settings
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
-# Targets
 TARGET_COLUMNS = ["co", "no2", "nox", "benzene"]
 
 # Derived paths from settings
@@ -38,7 +36,7 @@ except Exception as e:
 
 def main() -> int:
     print("=" * 70)
-    print("💨 AIR QUALITY PREDICTION PIPELINE - EXECUTION START")
+    print("AIR QUALITY PREDICTION PIPELINE - EXECUTION START")
     print("=" * 70)
 
     # Create any additional dirs used by this run
@@ -105,7 +103,7 @@ def main() -> int:
 
     # Stage 4: Summary
     print(f"\n{'=' * 70}")
-    print("✅ PIPELINE EXECUTION COMPLETE")
+    print("PIPELINE EXECUTION COMPLETE")
     print(f"{'=' * 70}")
     for target, metrics in results.items():
         print(f"[{target.upper():8}] | Model: {metrics['model']:15} | RMSE: {metrics['rmse']:.4f} | R²: {metrics['r2']:.4f}")

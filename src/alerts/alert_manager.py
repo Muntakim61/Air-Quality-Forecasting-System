@@ -2,13 +2,15 @@ import yaml
 import json
 import os
 import sys
+import pandas as pd
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 
-def load_alert_thresholds(config_path='src/config/configs/alerts.yaml'):
-    """Load alert threshold configuration"""
-    
-    # 1. Define robust default thresholds (required fallback)
+BASE_DIR = Path(__file__).resolve().parent.parent 
+DEFAULT_YAML_PATH = BASE_DIR / "config" / "configs" / "alerts.yaml"
+
+def load_alert_thresholds(config_path=None):
     DEFAULT_THRESHOLDS = {
         'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide'},
         'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide'},
@@ -16,66 +18,95 @@ def load_alert_thresholds(config_path='src/config/configs/alerts.yaml'):
         'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene'}
     }
 
-    # Use the provided path or the default
+    if config_path is None:
+        config_path = DEFAULT_YAML_PATH
     path_obj = Path(config_path)
 
-    if not path_obj.exists():
-        print(f"✗ Error: Alert config file not found at {config_path}. Returning default thresholds.", file=sys.stderr)
-        return DEFAULT_THRESHOLDS # Safe return
+    if path_obj.exists():
+        try:
+            with path_obj.open('r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                if isinstance(config, dict) and isinstance(config.get('thresholds'), dict):
+                    return config['thresholds']
+                print("Warning: 'thresholds' key missing or malformed in YAML.", file=sys.stderr)
+        except Exception as e:
+            print(f"Error reading alert config: {e}", file=sys.stderr)
 
-    try:
-        with path_obj.open('r') as f:
-            config = yaml.safe_load(f)
-        
-        # 2. Check if the configuration is valid
-        if isinstance(config, dict) and 'thresholds' in config:
-            print("TRACE: Config loaded successfully and format is correct. Returning loaded thresholds.", file=sys.stderr)
-            return config['thresholds'] # Explicit successful return
-        else:
-            print("Warning: YAML file loaded but 'thresholds' key is missing or invalid. Returning default thresholds.", file=sys.stderr)
-            return DEFAULT_THRESHOLDS # Explicit fallback return
-            
-    except Exception as e:
-        # 3. Handle file reading/parsing errors
-        print(f"✗ Error loading alert config: {e}. Falling back to default thresholds.", file=sys.stderr)
-        return DEFAULT_THRESHOLDS
-    
+    return DEFAULT_THRESHOLDS
+
 def evaluate_alerts(predictions_df, thresholds):
-    """Evaluate alert levels based on predictions"""
+    """
+    Evaluates alerts using Incident-Based logic:
+    1. Uses a rolling average to prevent 'flicker' alerts.
+    2. Groups consecutive violations into a single 'Incident'.
+    """
     alerts = []
+    # Use a 3-hour window for operational stability
+    window_size = 3 
     
-    for idx, row in predictions_df.iterrows():
-        for pollutant, value in row.items():
-            if pollutant in thresholds:
-                threshold = thresholds[pollutant]
-                
-                if value >= threshold['high']:
-                    severity = 'high'
-                    message = f"🔴 CRITICAL: {pollutant.upper()} level {value:.2f} exceeds high threshold ({threshold['high']})"
-                elif value >= threshold['medium']:
-                    severity = 'medium'
-                    message = f"🟠 WARNING: {pollutant.upper()} level {value:.2f} exceeds medium threshold ({threshold['medium']})"
-                elif value >= threshold['low']:
-                    severity = 'low'
-                    message = f"🟡 ADVISORY: {pollutant.upper()} level {value:.2f} exceeds low threshold ({threshold['low']})"
+    # Ensure we are working with a numeric copy
+    df = predictions_df.copy()
+
+    for pollutant in thresholds:
+        if pollutant not in df.columns:
+            continue
+            
+        threshold = thresholds[pollutant]
+        
+        # --- Step 1: Temporal Smoothing ---
+        # We calculate a rolling mean so one single spike doesn't panic the user.
+        # This represents "Sustained Exposure" which is what humans care about.
+        smoothed_values = df[pollutant].rolling(window=window_size, min_periods=1).mean()
+        
+        current_incident = None
+        
+        for idx, value in smoothed_values.items():
+            severity = None
+            if value >= threshold['high']:
+                severity = 'high'
+            elif value >= threshold['medium']:
+                severity = 'medium'
+            elif value >= threshold['low']:
+                severity = 'low'
+            
+            if severity:
+                # If we are already in an incident for this pollutant, just update it
+                if current_incident and current_incident['severity'] == severity:
+                    current_incident['end_index'] = int(idx)
+                    current_incident['max_value'] = max(current_incident['max_value'], float(df.loc[idx, pollutant]))
                 else:
-                    continue
-                
-                alerts.append({
-                    'timestamp': datetime.now().isoformat(),
-                    'index': int(idx),
-                    'pollutant': pollutant,
-                    'value': float(value),
-                    'severity': severity,
-                    'message': message
-                })
-    
+                    # If severity changed or new incident, close old and start new
+                    if current_incident:
+                        alerts.append(current_incident)
+                    
+                    prefix = "🔴 CRITICAL" if severity == 'high' else "🟠 WARNING" if severity == 'medium' else "🟡 ADVISORY"
+                    current_incident = {
+                        'timestamp': datetime.now().isoformat(),
+                        'start_index': int(idx),
+                        'end_index': int(idx),
+                        'pollutant': pollutant,
+                        'max_value': float(df.loc[idx, pollutant]),
+                        'severity': severity,
+                        'message': f"{prefix}: {threshold['description']} levels are sustained {severity} ({value:.2f} {threshold['unit']})"
+                    }
+            else:
+                # Value dropped below Low, close the incident
+                if current_incident:
+                    alerts.append(current_incident)
+                    current_incident = None
+        
+        # Catch any incident still open at the end of the data
+        if current_incident:
+            alerts.append(current_incident)
+
     return alerts
 
 def save_alerts(alerts, output_dir='outputs/alerts'):
     """Save alerts to JSON file"""
+    if not alerts:
+        return None
+
     os.makedirs(output_dir, exist_ok=True)
-    
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     file_path = os.path.join(output_dir, f'alerts_{timestamp}.json')
     

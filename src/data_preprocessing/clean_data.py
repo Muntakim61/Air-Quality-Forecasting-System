@@ -2,55 +2,40 @@ import pandas as pd
 import numpy as np
 
 def clean_data(df):
-    """Clean and preprocess air quality data (safe assignments, UI time fix)"""
+    """Clean and preprocess air quality data with Interpolation and Clipping."""
     df_clean = df.copy()
 
-    # Combine Date and Time columns if they exist separately
+    # 1. Standardize DateTime
     if 'Date' in df_clean.columns and 'Time' in df_clean.columns:
-        # UI-specific: replace dots with colons in Time (e.g., "18.00.00" -> "18:00:00")
         df_clean['Time'] = df_clean['Time'].astype(str).str.replace('.', ':', regex=False)
-        # Build a datetime series with explicit parsing where possible
         datetime_series = df_clean['Date'].astype(str).str.strip() + ' ' + df_clean['Time'].astype(str).str.strip()
-        try:
-            dt = pd.to_datetime(datetime_series, format='%d/%m/%Y %H:%M:%S', errors='coerce')
-        except Exception:
-            dt = pd.to_datetime(datetime_series, errors='coerce')
-        df_clean = df_clean.assign(DateTime=dt)
-        # Drop original Date/Time columns (non-inplace to avoid chained-assignment issues)
+        df_clean['DateTime'] = pd.to_datetime(datetime_series, errors='coerce')
         df_clean = df_clean.drop(columns=['Date', 'Time'], errors='ignore')
 
-    # Replace -200 values with NaN (missing data indicator in this dataset)
-    df_clean = df_clean.replace(-200, np.nan)
-
-    # Handle missing values for numeric columns (safe assignments)
+    # 2. Advanced Imputation: Replace -200 with NaN and use Linear Interpolation
+    # This captures the smooth transition of air quality better than forward-fill
     numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+    df_clean[numeric_cols] = df_clean[numeric_cols].mask(df_clean[numeric_cols] < 0, np.nan)
+    
+    # Interpolate numeric columns only
+    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+    df_clean[numeric_cols] = df_clean[numeric_cols].interpolate(method='linear', limit_direction='both')
+
+    # 3. Handle remaining NaNs (at edges) with median
     for col in numeric_cols:
         if df_clean[col].isnull().sum() > 0:
-            series = df_clean[col].ffill().bfill()
-            # If still NaN, use median if available
-            if series.isnull().sum() > 0:
-                median = series.median()
-                if not np.isnan(median):
-                    series = series.fillna(median)
-            df_clean[col] = series
+            df_clean[col] = df_clean[col].fillna(df_clean[col].median())
 
-    # Remove duplicates (non-inplace approach)
-    initial_rows = len(df_clean)
+    # 4. Outlier Handling: Clipping (Winsorization)
+    # Instead of dropping rows, we cap extreme values to reduce data loss
+    target_mapping = {'CO(GT)': 'co', 'NOx(GT)': 'nox', 'NO2(GT)': 'no2', 'C6H6(GT)': 'benzene'}
+    
+    for old_col, new_col in target_mapping.items():
+        if old_col in df_clean.columns:
+            Q1 = df_clean[old_col].quantile(0.10) # Using 10th percentile
+            Q3 = df_clean[old_col].quantile(0.90) # Using 90th percentile
+            df_clean[old_col] = df_clean[old_col].clip(lower=Q1, upper=Q3)
+            df_clean = df_clean.rename(columns={old_col: new_col})
+
     df_clean = df_clean.drop_duplicates()
-    removed = initial_rows - len(df_clean)
-    if removed > 0:
-        print(f"✓ Removed {removed} duplicate rows")
-
-    # Remove outliers using IQR method (only for target variables)
-    target_cols = ['CO(GT)', 'NOx(GT)', 'NO2(GT)', 'C6H6(GT)']
-    for col in target_cols:
-        if col in df_clean.columns:
-            Q1 = df_clean[col].quantile(0.25)
-            Q3 = df_clean[col].quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 3 * IQR
-            upper_bound = Q3 + 3 * IQR
-            df_clean = df_clean[(df_clean[col] >= lower_bound) & (df_clean[col] <= upper_bound)]
-
-    print(f"✓ Data cleaned: {len(df_clean)} rows remaining")
     return df_clean

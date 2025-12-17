@@ -1,4 +1,3 @@
-# src/dashboard/app.py
 import os
 import sys
 import json
@@ -15,27 +14,12 @@ from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# =========================================================================
-# === REFACTORING: IMPORT CENTRALIZED UTILITIES (Copilot Changes) =========
-# =========================================================================
-# Note: Assuming your project structure aligns with these imports (e.g.,
-# src/data_preprocessing/clean_data.py, src/alerts/alert_manager.py, etc.)
-
 # Data Preprocessing
 from src.data_preprocessing.clean_data import clean_data
 from src.data_preprocessing.feature_engineering import create_features
-# Load Data (load_raw_data not strictly needed but included for completeness)
-# from src.data_preprocessing.load_data import load_raw_data 
 
 # Alerts Manager
 from src.alerts.alert_manager import load_alert_thresholds, evaluate_alerts, save_alerts
-# Training module (train_best_models not directly used in app.py but sometimes imported)
-# from src.models.train_ensemble import train_best_models 
-
-# =========================================================================
-# === END OF REFACTORING CHANGES ==========================================
-# =========================================================================
-
 
 # ---------- Utility: Paths ----------
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -45,16 +29,6 @@ ALERTS_OUTPUT_DIR = REPO_ROOT / "outputs" / "alerts"
 
 # ---------- CONSTANTS FIX: Define TARGET_COLUMNS here ----------
 TARGET_COLUMNS = ["co", "no2", "nox", "benzene"]
-# ----------------------------------------------------------------
-
-# =========================================================================
-# === REMOVED: Duplicated local `clean_data` and `create_features` =======
-# === REMOVED: Duplicated local `load_alert_thresholds` ===================
-# === REMOVED: Duplicated local `evaluate_alerts` =========================
-# === REMOVED: Duplicated local `save_alerts` =============================
-# === Functions are now imported from centralized modules. =================
-# =========================================================================
-
 
 # ---------- Fixed: load_models now finds files created by train_ensemble ----------
 @st.cache_resource
@@ -79,8 +53,6 @@ def load_models(model_dir: Path | None = None):
             pollutant, model_name = parts[0], parts[0] 
         try:
             mdl = joblib.load(file)
-            # Old app.py expects models[pollutant] to be a dictionary of models (ensemble),
-            # so we ensure it's a dict even if only one model is loaded.
             models.setdefault(pollutant, {})[model_name] = mdl 
         except Exception as e:
             print(f"Warning: failed to load model file {file}: {e}", file=sys.stderr)
@@ -244,7 +216,6 @@ st.markdown("""
         color: white;
         border-radius: 10px;
     }
-    /* === IMPROVED METRIC CARD STYLES === */
     .metric-card {
         background-color: #f0f2f6;
         padding: 15px;
@@ -324,7 +295,7 @@ st.markdown("""
 st.set_page_config(
     page_title="Air Quality Forecasting System",
     page_icon="🌍",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="expanded"
 )
 
@@ -348,7 +319,7 @@ def display_alerts(alerts):
 
 def main():
     # Header: Use the custom CSS class 'main-header'
-    st.markdown('<div class="main-header">🌍 Air Quality Forecasting & Alert System</div>', 
+    st.markdown('<div class="main-header">Air Quality Forecasting & Alert System</div>', 
                 unsafe_allow_html=True)
     
     # Sidebar Setup
@@ -375,22 +346,20 @@ def main():
     st.sidebar.success(f"{sum(len(v) for v in models.values())} model files loaded")
     st.sidebar.markdown(f"**Pollutants:** {', '.join([m.upper() for m in models.keys()])}")
     
-    # Load thresholds (Now using the imported centralized function)
-    # The imported function should handle the ALERTS_CONFIG_PATH logic internally
     thresholds = load_alert_thresholds() 
     print(f"DEBUG: Value of 'thresholds' loaded in app.py: {thresholds}")
     
-    # === CRITICAL FIX: Ensure 'thresholds' is a dictionary for the UI loop ===
-    if thresholds is None:
-        st.error("Error: Could not load alert thresholds from file. Using hardcoded defaults.")
-        # Provide a hardcoded dictionary structure to prevent the crash
-        thresholds = { 
-            'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide (Default)'},
-            'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide (Default)'},
-            'nox': {'low': 150, 'medium': 300, 'high': 600, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides (Default)'},
-            'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene (Default)'}
-        }
-    # Sidebar: Alert Thresholds
+    # # === CRITICAL FIX: Ensure 'thresholds' is a dictionary for the UI loop ===
+    # if thresholds is None:
+    #     st.error("Error: Could not load alert thresholds from file. Using hardcoded defaults.")
+    #     # Provide a hardcoded dictionary structure to prevent the crash
+    #     thresholds = { 
+    #         'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide (Default)'},
+    #         'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide (Default)'},
+    #         'nox': {'low': 150, 'medium': 300, 'high': 600, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides (Default)'},
+    #         'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene (Default)'}
+    #     }
+    # # Sidebar: Alert Thresholds
     st.sidebar.markdown("---")
     st.sidebar.subheader("Alert Thresholds")
     for pollutant, threshold in thresholds.items():
@@ -422,15 +391,15 @@ def main():
         - Date, Time
         - Sensor readings (PT08.S1, etc.)
         - Temperature (T), Humidity (RH)
+        - Add at least a few hours of data for meaningful forecasts.
         """)
 
     if uploaded_file is None:
         st.info("Upload raw dataset CSV to generate predictions.")
         return
 
-    # Load and process data (now outside the button click for metric display)
+    # Load and process data
     try:
-        # Try different separators to match the old app.py robustness (sep=None/python engine, then default)
         try:
             df_input = pd.read_csv(uploaded_file, sep=None, engine="python")
         except Exception:
@@ -439,7 +408,15 @@ def main():
         st.error(f"Error loading CSV: {e}")
         return
 
-    st.success(f"Successfully loaded {len(df_input)} rows")
+    # --- NEW: Row Count Validation ---
+    MIN_REQUIRED_ROWS = 5 # Set to 5 to satisfy rolling_mean_3 and lag features
+
+    if len(df_input) < MIN_REQUIRED_ROWS:
+        st.error(f"❌ **Insufficient Data:** The uploaded file contains only {len(df_input)} rows.")
+        st.warning(f"The model requires at least **{MIN_REQUIRED_ROWS} consecutive hours** of data to calculate trends, rolling averages, and lag features accurately. Please upload a larger dataset.")
+        st.stop()
+
+    st.success(f"Successfully loaded {len(df_input)} rows. Proceeding with analysis...")
     
     # Show data preview
     with st.expander("View Raw Data Preview (First 10 Rows)", expanded=False):
@@ -455,16 +432,16 @@ def main():
     
     st.markdown("---")
     
-    # Prediction Section
-    st.subheader("Generate Predictions")
+    # # Prediction Section
+    # st.subheader("Generate Predictions")
     
     col_pred_left, col_pred_center, col_pred_right = st.columns([1, 2, 1])
     
     with col_pred_center:
         predict_button = st.button(
             "Generate Forecasts",
-            type="primary",
-            use_container_width=True
+            type="secondary",
+            width='stretch'
         )
 
     # Prediction Logic
@@ -478,11 +455,9 @@ def main():
                 # 2. Prepare features for prediction
                 X = df_features.select_dtypes(include=[np.number]).copy()
                 
-                # --- FIX: Drop target columns using the now-defined global constant ---
                 for t in TARGET_COLUMNS:
                     if t in X.columns:
                         X = X.drop(columns=[t])
-                # ---------------------------------------------------------------------
                 
                 if X.shape[0] == 0:
                     st.error("No numeric feature columns available after preprocessing.")
@@ -565,15 +540,32 @@ def main():
                 # 3. Correlation heatmap (Seaborn)
                 with st.expander("View Pollutant Correlation Matrix (Seaborn)", expanded=False):
                     st.markdown("### Pollutant Correlation Matrix")
-                    
-                    fig_corr, ax = plt.subplots(figsize=(10, 8))
-                    corr_matrix = preds_df.corr() # Note: Using preds_df
-                    sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm',
-                                center=0, square=True, linewidths=1, ax=ax,
-                                cbar_kws={"shrink": 0.8})
-                    ax.set_title('Correlation Between Predicted Pollutants', 
-                                 fontsize=16, fontweight='bold')
-                    st.pyplot(fig_corr) # Display Seaborn plot
+        
+                    # CHECK: Do we have enough data for a correlation?
+                    # 1. Must have more than 1 row
+                    # 2. Must have more than 1 column
+                    # 3. Columns must not be all NaNs
+                    if len(preds_df) <= 1:
+                        st.warning("⚠️ Correlation Matrix cannot be generated for a single row of data. Please upload a dataset with multiple time entries to see pollutant relationships.")
+                    elif preds_df.nunique().max() <= 1:
+                        st.info("ℹ️ Correlation cannot be calculated because the predicted values are constant (no variation) for this batch.")
+                    else:
+                        try:
+                            fig_corr, ax = plt.subplots(figsize=(10, 8))
+                            corr_matrix = preds_df.corr()
+                            
+                            # Additional check to ensure the matrix isn't empty after calculation
+                            if corr_matrix.isnull().all().all():
+                                st.error("Unable to calculate correlation: The data contains too many missing values.")
+                            else:
+                                sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm',
+                                            center=0, square=True, linewidths=1, ax=ax,
+                                            cbar_kws={"shrink": 0.8})
+                                ax.set_title('Correlation Between Predicted Pollutants', 
+                                            fontsize=16, fontweight='bold')
+                                st.pyplot(fig_corr)
+                        except Exception as e:
+                            st.error(f"Could not generate correlation matrix: {e}")
                 
                 # Download section
                 st.markdown("---")
@@ -589,7 +581,7 @@ def main():
                         data=csv,
                         file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
-                        use_container_width=True
+                        width='stretch'
                     )
                 
                 with col2_dl:

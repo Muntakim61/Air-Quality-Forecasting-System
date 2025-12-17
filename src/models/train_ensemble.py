@@ -3,84 +3,64 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-from sklearn.model_selection import train_test_split
+# Change 1: Import TimeSeriesSplit instead of train_test_split
+from sklearn.model_selection import TimeSeriesSplit 
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.ensemble import RandomForestRegressor
 from lightgbm import LGBMRegressor
-from xgboost import XGBRegressor # Included for completeness if used later
+from xgboost import XGBRegressor 
 
 # Set random seed for reproducibility
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
 def train_best_models(X: pd.DataFrame, y: pd.DataFrame, target_names: list, output_dir: str = 'outputs/models'):
-    """
-    Objective: Train the final, production-ready model for each pollutant 
-               using hyperparameter-tuned settings.
-    
-    Accountability:
-    - Uses the best-performing model (RandomForest/LightGBM) and optimized 
-      parameters derived from prior tuning efforts (provided by the user).
-    - Splits data for final evaluation and saves the trained model objects.
-    
-    Args:
-        X (pd.DataFrame): Feature matrix.
-        y (pd.DataFrame): Target matrix.
-        target_names (list): List of target column names.
-        output_dir (str): Directory to save the trained models.
-
-    Returns:
-        dict: Summary of evaluation metrics (RMSE, R²) for each target.
-    """
+    """Train optimized models for each target with TimeSeriesSplit and save them."""
+    # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Split Data for Evaluation
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=RANDOM_SEED
-    )
+    # Change 2: Use TimeSeriesSplit to maintain temporal order
+    # This ensures we train on the 'past' and test on the 'future'
+    tscv = TimeSeriesSplit(n_splits=5)
+    for train_index, test_index in tscv.split(X):
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
     results = {}
 
-    # 2. Define Final Models with Hyperparameter Tuning Results
-    # Incorporating FINAL BEST MODEL and its parameters from the tuning output.
+    # Change 3: Updated Optimized Model Configurations
     best_models = {
-        # CO: Final Best Model: RandomForest (RMSE: 11.8993)
-        'co': RandomForestRegressor(
-            n_estimators=200,
-            max_depth=18,
-            min_samples_split=4,
-            random_state=RANDOM_SEED,
-            n_jobs=-1
-        ),
-        # NO2: Final Best Model: LightGBM (RMSE: 38.8345)
-        'no2': LGBMRegressor(
-            n_estimators=450,
-            learning_rate=0.062147422437610705,
+        # CO: Improved with more estimators for better smoothing
+        'co': LGBMRegressor(
+            n_estimators=500,
+            learning_rate=0.05,
             num_leaves=31,
-            min_data_in_leaf=65,
-            feature_fraction=0.6299924747454009,
-            bagging_fraction=0.7337498258560773,
-            random_state=RANDOM_SEED,
-            n_jobs=-1,
-            verbose=-1 # Suppress logging
-        ),
-        # NOx: Final Best Model: LightGBM (RMSE: 88.1821)
-        'nox': LGBMRegressor(
-            n_estimators=450,
-            learning_rate=0.07322370567394015,
-            num_leaves=35,
-            min_data_in_leaf=51,
-            feature_fraction=0.8976634677873652,
-            bagging_fraction=0.6002336297523043,
             random_state=RANDOM_SEED,
             n_jobs=-1,
             verbose=-1
         ),
-        # Benzene: Final Best Model: RandomForest (RMSE: 0.0175)
+        # NO2: Switched to RandomForest for better stability in this range
+        'no2': RandomForestRegressor(
+            n_estimators=300,
+            max_depth=15,
+            random_state=RANDOM_SEED,
+            n_jobs=-1
+        ),
+        # NOx: Switched to XGBoost (Critical for high-variance pollutants)
+        'nox': XGBRegressor(
+            n_estimators=400,
+            max_depth=8,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=RANDOM_SEED,
+            n_jobs=-1
+        ),
+        # Benzene: Standardized RandomForest parameters
         'benzene': RandomForestRegressor(
             n_estimators=200,
-            max_depth=18,
-            min_samples_split=4,
+            max_depth=20,
+            min_samples_split=2,
             random_state=RANDOM_SEED,
             n_jobs=-1
         )
@@ -108,7 +88,7 @@ def train_best_models(X: pd.DataFrame, y: pd.DataFrame, target_names: list, outp
         r2 = r2_score(y_test_target, y_pred)
 
         # Log results
-        print(f"    - Metrics (Test Set):")
+        print(f"    - Metrics (Final Time-Series Fold):")
         print(f"    - RMSE: {rmse:.4f}")
         print(f"    - R²:   {r2:.4f}")
 
