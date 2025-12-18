@@ -1,43 +1,25 @@
-import os
 import sys
-import json
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import numpy as np
 import joblib
-import yaml
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-# Data Preprocessing
 from src.data_preprocessing.clean_data import clean_data
 from src.data_preprocessing.feature_engineering import create_features
-
-# Alerts Manager
 from src.alerts.alert_manager import load_alert_thresholds, evaluate_alerts, save_alerts
-
-# ---------- Utility: Paths ----------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = REPO_ROOT / "outputs" / "models"
 ALERTS_CONFIG_PATH = REPO_ROOT / "src" / "config" / "configs" / "alerts.yaml"
 ALERTS_OUTPUT_DIR = REPO_ROOT / "outputs" / "alerts"
-
-# ---------- CONSTANTS FIX: Define TARGET_COLUMNS here ----------
 TARGET_COLUMNS = ["co", "no2", "nox", "benzene"]
-
-# ---------- Fixed: load_models now finds files created by train_ensemble ----------
 @st.cache_resource
 def load_models(model_dir: Path | None = None):
-    """
-    Load trained model files from outputs/models.
-    
-    Returns: dict[pollutant] -> dict[model_name] = model_object
-    """
     models = {}
     md = Path(model_dir) if model_dir else MODEL_DIR
     if not md.exists():
@@ -49,34 +31,25 @@ def load_models(model_dir: Path | None = None):
         if len(parts) == 2:
             pollutant, model_name = parts
         else:
-            # Fallback for models without an explicit name (e.g., just 'co.joblib')
             pollutant, model_name = parts[0], parts[0] 
         try:
             mdl = joblib.load(file)
             models.setdefault(pollutant, {})[model_name] = mdl 
         except Exception as e:
             print(f"Warning: failed to load model file {file}: {e}", file=sys.stderr)
-
     return models
 
-
-# ---------- Model prediction helpers (No changes here) ----------
 def _expected_feature_names(model) -> list | None:
-    
-    # sklearn
     if hasattr(model, "feature_names_in_"):
         return list(getattr(model, "feature_names_in_"))
-    # lightgbm
     if hasattr(model, "feature_name_"):
         return list(getattr(model, "feature_name_"))
-    # lightgbm Booster
     try:
         if hasattr(model, "booster_"):
             feat = model.booster_.feature_name()
             return list(feat)
     except Exception:
         pass
-    # fallback: None
     return None
 
 
@@ -89,27 +62,20 @@ def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
             try:
                 expected = _expected_feature_names(mdl)
                 if expected is not None:
-                    # Reindex X to match training features: missing -> fill 0, extra -> dropped
                     X_model = X.reindex(columns=expected)
-                    # Fill any missing columns with zeros and ensure numeric dtype
                     X_model = X_model.fillna(0).astype(float)
                 else:
-                    # If we can't get expected names, try to use numeric columns ordered as-is
                     X_model = X.select_dtypes(include=[np.number]).fillna(0).astype(float)
-
-                # Predict
                 p = mdl.predict(X_model)
                 preds_list.append(np.asarray(p).reshape(-1))
             except Exception as e:
                 print(f"Warning: model {name} for {pollutant} failed to predict: {e}", file=sys.stderr)
-                # continue to next model
 
         if preds_list:
-            arr = np.vstack(preds_list)  # shape (n_models, n_samples)
-            # compute mean across models but avoid warnings when columns are all-NaN
+            arr = np.vstack(preds_list)
             with np.errstate(invalid="ignore"):
                 avg = np.nanmean(arr, axis=0)
-            # where all entries are nan, set result to nan explicitly (nanmean gives nan but may warn)
+            
             all_nan_mask = np.all(np.isnan(arr), axis=0)
             if all_nan_mask.any():
                 avg[all_nan_mask] = np.nan
@@ -118,12 +84,7 @@ def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.DataFrame(preds)
 
-
-# --- Plotting function (using the old app.py's detailed version for UI match) ---
 def plot_pollutant_trends(predictions_df, thresholds):
-    """Create interactive plotly charts for pollutants including thresholds"""
-    
-    # Ensure all required pollutants are in the predictions_df, filling with NaN if missing
     pollutants = TARGET_COLUMNS
     for p in pollutants:
         if p not in predictions_df.columns:
@@ -141,7 +102,6 @@ def plot_pollutant_trends(predictions_df, thresholds):
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
     
     for idx, (pollutant, pos, color) in enumerate(zip(pollutants, positions, colors)):
-        # Main prediction line
         fig.add_trace(
             go.Scatter(
                 x=list(range(len(predictions_df))),
@@ -152,12 +112,8 @@ def plot_pollutant_trends(predictions_df, thresholds):
             ),
             row=pos[0], col=pos[1]
         )
-        
-        # Threshold lines
         if pollutant in thresholds:
             threshold = thresholds[pollutant]
-            
-            # High threshold
             fig.add_hline(
                 y=threshold['high'],
                 line_dash="dash",
@@ -166,8 +122,6 @@ def plot_pollutant_trends(predictions_df, thresholds):
                 row=pos[0], col=pos[1],
                 annotation_position="top left"
             )
-            
-            # Medium threshold
             fig.add_hline(
                 y=threshold['medium'],
                 line_dash="dash",
@@ -176,8 +130,6 @@ def plot_pollutant_trends(predictions_df, thresholds):
                 row=pos[0], col=pos[1],
                 annotation_position="bottom left"
             )
-            
-            # Low threshold
             fig.add_hline(
                 y=threshold['low'],
                 line_dash="dash",
@@ -199,10 +151,6 @@ def plot_pollutant_trends(predictions_df, thresholds):
     
     return fig
 
-
-# ---------- Streamlit UI ----------
-
-# Custom CSS for the old app.py look
 st.markdown("""
     <style>
     .main-header {
@@ -229,14 +177,12 @@ st.markdown("""
         flex-direction: column;
         justify-content: space-between;
     }
-    
-    /* Dynamic Border Colors based on Pollutant */
+            
     .metric-card-co { border-left: 5px solid #ff4444; }
     .metric-card-no2 { border-left: 5px solid #ffaa00; }
     .metric-card-nox { border-left: 5px solid #2ca02c; }
     .metric-card-benzene { border-left: 5px solid #764ba2; }
 
-    /* Internal element styling */
     .metric-card h4 {
         margin-top: 0;
         margin-bottom: 5px; 
@@ -255,8 +201,6 @@ st.markdown("""
         margin-top: 0px;
         font-size: 0.9rem;
     }
-    /* ================================== */
-
     .alert-high {
         background-color: #ff4444;
         color: white;
@@ -301,9 +245,7 @@ st.set_page_config(
 
 def display_alerts(alerts):
     """Display alerts using custom CSS classes"""
-    st.subheader(f"⚠️ Generated Alerts ({len(alerts)})")
-    
-    # Use st.expander for a cleaner look
+    st.subheader(f"Generated Alerts ({len(alerts)})")
     with st.expander("View Detailed Alerts", expanded=True):
         if not alerts:
             st.info("No elevated alerts were triggered.")
@@ -318,15 +260,12 @@ def display_alerts(alerts):
 
 
 def main():
-    # Header: Use the custom CSS class 'main-header'
     st.markdown('<div class="main-header">Air Quality Forecasting & Alert System</div>', 
                 unsafe_allow_html=True)
     
-    # Sidebar Setup
     st.sidebar.title("System Settings")
     st.sidebar.markdown("---")
 
-    # Load models
     models = load_models()
     
     if not models:
@@ -341,25 +280,12 @@ def main():
         3. Refresh this dashboard.
         """)
         return
-    
-    # Sidebar: Model Info
+
     st.sidebar.success(f"{sum(len(v) for v in models.values())} model files loaded")
     st.sidebar.markdown(f"**Pollutants:** {', '.join([m.upper() for m in models.keys()])}")
     
     thresholds = load_alert_thresholds() 
     print(f"DEBUG: Value of 'thresholds' loaded in app.py: {thresholds}")
-    
-    # # === CRITICAL FIX: Ensure 'thresholds' is a dictionary for the UI loop ===
-    # if thresholds is None:
-    #     st.error("Error: Could not load alert thresholds from file. Using hardcoded defaults.")
-    #     # Provide a hardcoded dictionary structure to prevent the crash
-    #     thresholds = { 
-    #         'co': {'low': 2.0, 'medium': 4.0, 'high': 9.0, 'unit': 'mg/m³', 'description': 'Carbon Monoxide (Default)'},
-    #         'no2': {'low': 100, 'medium': 200, 'high': 400, 'unit': 'µg/m³', 'description': 'Nitrogen Dioxide (Default)'},
-    #         'nox': {'low': 150, 'medium': 300, 'high': 600, 'unit': 'µg/m³', 'description': 'Nitrogen Oxides (Default)'},
-    #         'benzene': {'low': 5.0, 'medium': 10.0, 'high': 20.0, 'unit': 'µg/m³', 'description': 'Benzene (Default)'}
-    #     }
-    # # Sidebar: Alert Thresholds
     st.sidebar.markdown("---")
     st.sidebar.subheader("Alert Thresholds")
     for pollutant, threshold in thresholds.items():
@@ -412,7 +338,7 @@ def main():
     MIN_REQUIRED_ROWS = 5 # Set to 5 to satisfy rolling_mean_3 and lag features
 
     if len(df_input) < MIN_REQUIRED_ROWS:
-        st.error(f"❌ **Insufficient Data:** The uploaded file contains only {len(df_input)} rows.")
+        st.error(f"**Insufficient Data:** The uploaded file contains only {len(df_input)} rows.")
         st.warning(f"The model requires at least **{MIN_REQUIRED_ROWS} consecutive hours** of data to calculate trends, rolling averages, and lag features accurately. Please upload a larger dataset.")
         st.stop()
 
@@ -494,32 +420,25 @@ def main():
                 # 1. Interactive Visualizations (Plotly Trends)
                 with st.expander("View Interactive Pollutant Forecast Trends (Plotly)", expanded=False):
                     st.markdown("### Interactive Visualizations")
-                    # Note: Using preds_df
                     fig = plot_pollutant_trends(preds_df, thresholds) 
                     st.plotly_chart(fig, use_container_width=True)
                 
-                # 2. Distribution plots (Matplotlib)
                 with st.expander("View Pollutant Distribution Analysis (Matplotlib)", expanded=False):
                     st.markdown("### Pollutant Distribution Analysis")
                     
-                    # Create the figure for Matplotlib/Seaborn
                     fig_dist, axes = plt.subplots(2, 2, figsize=(15, 10))
                     axes = axes.flatten()
                     
                     pollutants_dist = TARGET_COLUMNS
-                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'] # Consistent colors
+                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
                     
                     for idx, (pollutant, color) in enumerate(zip(pollutants_dist, colors)):
-                        # Check if pollutant exists in predictions
                         if pollutant not in preds_df.columns:
                              axes[idx].set_title(f'{pollutant.upper()} - Data Missing', fontsize=14)
-                             # Set axis limits to ensure blank plots are consistent
                              axes[idx].set_xlim(0, 1) 
                              axes[idx].set_ylim(0, 1)
                              continue
-                             
-                        # Histogram
-                        # Use dropna() for the distribution plot to handle potential NaNs
+
                         axes[idx].hist(preds_df[pollutant].dropna(), bins=30, alpha=0.7, 
                                        color=color, edgecolor='black')
                         axes[idx].set_title(f'{pollutant.upper()} Distribution', 
@@ -535,16 +454,10 @@ def main():
                         axes[idx].legend()
                     
                     plt.tight_layout()
-                    st.pyplot(fig_dist) # Display Matplotlib figure
-                
-                # 3. Correlation heatmap (Seaborn)
+                    st.pyplot(fig_dist)
+
                 with st.expander("View Pollutant Correlation Matrix (Seaborn)", expanded=False):
-                    st.markdown("### Pollutant Correlation Matrix")
-        
-                    # CHECK: Do we have enough data for a correlation?
-                    # 1. Must have more than 1 row
-                    # 2. Must have more than 1 column
-                    # 3. Columns must not be all NaNs
+                    st.markdown("Pollutant Correlation Matrix")
                     if len(preds_df) <= 1:
                         st.warning("⚠️ Correlation Matrix cannot be generated for a single row of data. Please upload a dataset with multiple time entries to see pollutant relationships.")
                     elif preds_df.nunique().max() <= 1:
@@ -553,8 +466,6 @@ def main():
                         try:
                             fig_corr, ax = plt.subplots(figsize=(10, 8))
                             corr_matrix = preds_df.corr()
-                            
-                            # Additional check to ensure the matrix isn't empty after calculation
                             if corr_matrix.isnull().all().all():
                                 st.error("Unable to calculate correlation: The data contains too many missing values.")
                             else:
@@ -567,17 +478,15 @@ def main():
                         except Exception as e:
                             st.error(f"Could not generate correlation matrix: {e}")
                 
-                # Download section
                 st.markdown("---")
                 st.subheader("Download Results")
                 
                 col1_dl, col2_dl = st.columns(2) 
 
                 with col1_dl:
-                    # Download predictions
-                    csv = preds_df.to_csv(index=False) # Note: Using preds_df
+                    csv = preds_df.to_csv(index=False)
                     st.download_button(
-                        label="📥 Download Predictions CSV",
+                        label="Download Predictions CSV",
                         data=csv,
                         file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
@@ -585,15 +494,14 @@ def main():
                     )
                 
                 with col2_dl:
-                    # Download full results with datetime
-                    if 'DateTime' in df_features.columns: # df_features still holds the DateTime column
+                    if 'DateTime' in df_features.columns:
                         full_results = pd.concat([
                             df_features[['DateTime']].reset_index(drop=True),
                             preds_df.reset_index(drop=True)
                         ], axis=1)
                         csv_full = full_results.to_csv(index=False)
                         st.download_button(
-                            label="📥 Download Full Results with Timestamps",
+                            label="Download Full Results with Timestamps",
                             data=csv_full,
                             file_name=f"full_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv",
@@ -605,7 +513,6 @@ def main():
                 # --- END OF NEW VISUALIZATIONS AND DOWNLOAD SECTIONS ---
 
             except Exception as e:
-                # Catch any unexpected errors during the prediction path
                 st.error(f"An error occurred during prediction: {e}")
 
 

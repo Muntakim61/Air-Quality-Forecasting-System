@@ -35,16 +35,8 @@ def load_alert_thresholds(config_path=None):
     return DEFAULT_THRESHOLDS
 
 def evaluate_alerts(predictions_df, thresholds):
-    """
-    Evaluates alerts using Incident-Based logic:
-    1. Uses a rolling average to prevent 'flicker' alerts.
-    2. Groups consecutive violations into a single 'Incident'.
-    """
     alerts = []
-    # Use a 3-hour window for operational stability
     window_size = 3 
-    
-    # Ensure we are working with a numeric copy
     df = predictions_df.copy()
 
     for pollutant in thresholds:
@@ -52,10 +44,6 @@ def evaluate_alerts(predictions_df, thresholds):
             continue
             
         threshold = thresholds[pollutant]
-        
-        # --- Step 1: Temporal Smoothing ---
-        # We calculate a rolling mean so one single spike doesn't panic the user.
-        # This represents "Sustained Exposure" which is what humans care about.
         smoothed_values = df[pollutant].rolling(window=window_size, min_periods=1).mean()
         
         current_incident = None
@@ -70,39 +58,39 @@ def evaluate_alerts(predictions_df, thresholds):
                 severity = 'low'
             
             if severity:
-                # If we are already in an incident for this pollutant, just update it
+                prefix = "🔴 CRITICAL" if severity == 'high' else "🟠 WARNING" if severity == 'medium' else "🟡 ADVISORY"
+                
+                msg = f"{prefix}: {threshold['description']} levels are {severity} (Avg: {value:.2f} {threshold['unit']})"
+                
                 if current_incident and current_incident['severity'] == severity:
-                    current_incident['end_index'] = int(idx)
+                    
+                    current_incident['end_index'] = str(idx)
                     current_incident['max_value'] = max(current_incident['max_value'], float(df.loc[idx, pollutant]))
+                    current_incident['message'] = msg 
                 else:
-                    # If severity changed or new incident, close old and start new
+                    
                     if current_incident:
                         alerts.append(current_incident)
                     
-                    prefix = "🔴 CRITICAL" if severity == 'high' else "🟠 WARNING" if severity == 'medium' else "🟡 ADVISORY"
                     current_incident = {
                         'timestamp': datetime.now().isoformat(),
-                        'start_index': int(idx),
-                        'end_index': int(idx),
+                        'start_index': str(idx),
+                        'end_index': str(idx),
                         'pollutant': pollutant,
                         'max_value': float(df.loc[idx, pollutant]),
                         'severity': severity,
-                        'message': f"{prefix}: {threshold['description']} levels are sustained {severity} ({value:.2f} {threshold['unit']})"
+                        'message': msg
                     }
             else:
-                # Value dropped below Low, close the incident
                 if current_incident:
                     alerts.append(current_incident)
                     current_incident = None
         
-        # Catch any incident still open at the end of the data
         if current_incident:
             alerts.append(current_incident)
 
     return alerts
-
 def save_alerts(alerts, output_dir='outputs/alerts'):
-    """Save alerts to JSON file"""
     if not alerts:
         return None
 
@@ -115,5 +103,5 @@ def save_alerts(alerts, output_dir='outputs/alerts'):
             json.dump(alerts, f, indent=2)
         return file_path
     except Exception as e:
-        print(f"✗ Error saving alerts: {e}")
+        print(f"Error saving alerts: {e}")
         return None
