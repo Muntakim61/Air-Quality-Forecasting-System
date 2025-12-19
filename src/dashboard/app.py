@@ -1,7 +1,14 @@
+"""
+Air Quality Forecasting Dashboard
+---------------------------------
+A Streamlit-based web application for loading raw sensor data, generating 
+pollutant forecasts using pre-trained ensemble models, and evaluating 
+health-based alert thresholds.
+"""
+
 import sys
 from datetime import datetime
 from pathlib import Path
-
 import pandas as pd
 import numpy as np
 import joblib
@@ -10,16 +17,34 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+# Internal module imports for data processing and alert logic
 from src.data_preprocessing.clean_data import clean_data
 from src.data_preprocessing.feature_engineering import create_features
 from src.alerts.alert_manager import load_alert_thresholds, evaluate_alerts, save_alerts
+
+# --- Global Path Configuration ---
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = REPO_ROOT / "outputs" / "models"
 ALERTS_CONFIG_PATH = REPO_ROOT / "src" / "config" / "configs" / "alerts.yaml"
 ALERTS_OUTPUT_DIR = REPO_ROOT / "outputs" / "alerts"
+
+# Standard pollutants targeted by the models
 TARGET_COLUMNS = ["co", "no2", "nox", "benzene"]
 @st.cache_resource
 def load_models(model_dir: Path | None = None):
+    """
+    Scans the directory for .joblib files and loads models into a nested dictionary.
+    
+    Uses @st.cache_resource to prevent redundant disk I/O on every UI interaction.
+    Expected filename format: pollutantName_modelVariant.joblib
+
+    Args:
+        model_dir (Path, optional): Custom path to models. Defaults to MODEL_DIR.
+
+    Returns:
+        dict: {pollutant: {model_variant_name: model_object}}
+    """
     models = {}
     md = Path(model_dir) if model_dir else MODEL_DIR
     if not md.exists():
@@ -40,6 +65,10 @@ def load_models(model_dir: Path | None = None):
     return models
 
 def _expected_feature_names(model) -> list | None:
+    """
+    Introspects various model types to extract required input feature names.
+    Supports Scikit-Learn, LightGBM, and XGBoost attributes.
+    """
     if hasattr(model, "feature_names_in_"):
         return list(getattr(model, "feature_names_in_"))
     if hasattr(model, "feature_name_"):
@@ -52,14 +81,27 @@ def _expected_feature_names(model) -> list | None:
         pass
     return None
 
-
 def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Performs batch inference and aggregates results via ensembling.
     
+    For each pollutant, the function iterates through all available model 
+    variants (e.g., RF, XGB, LGBM) and calculates the arithmetic mean of 
+    their predictions.
+
+    Args:
+        models (dict): Nested dictionary of loaded models.
+        X (pd.DataFrame): Preprocessed feature matrix.
+
+    Returns:
+        pd.DataFrame: Averaged predictions for each pollutant.
+    """
     preds = {}
     for pollutant, model_dict in models.items():
         preds_list = []
         for name, mdl in model_dict.items():
             try:
+                # Ensure feature alignment with the specific model requirements
                 expected = _expected_feature_names(mdl)
                 if expected is not None:
                     X_model = X.reindex(columns=expected)
@@ -72,10 +114,12 @@ def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
                 print(f"Warning: model {name} for {pollutant} failed to predict: {e}", file=sys.stderr)
 
         if preds_list:
+            # Aggregate variants using mean (Ensembling)
             arr = np.vstack(preds_list)
             with np.errstate(invalid="ignore"):
                 avg = np.nanmean(arr, axis=0)
             
+            # Mask cases where all models failed
             all_nan_mask = np.all(np.isnan(arr), axis=0)
             if all_nan_mask.any():
                 avg[all_nan_mask] = np.nan
@@ -85,6 +129,12 @@ def make_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(preds)
 
 def plot_pollutant_trends(predictions_df, thresholds):
+    """
+    Generates multi-paneled interactive line charts for pollutant trends.
+    
+    Overlays horizontal dashed lines representing 'Low', 'Medium', and 'High'
+    alert thresholds defined in the system configuration.
+    """
     pollutants = TARGET_COLUMNS
     for p in pollutants:
         if p not in predictions_df.columns:
@@ -114,6 +164,7 @@ def plot_pollutant_trends(predictions_df, thresholds):
         )
         if pollutant in thresholds:
             threshold = thresholds[pollutant]
+            # Add horizontal threshold indicators
             fig.add_hline(
                 y=threshold['high'],
                 line_dash="dash",
@@ -151,6 +202,7 @@ def plot_pollutant_trends(predictions_df, thresholds):
     
     return fig
 
+# --- UI Customization (CSS) ---
 st.markdown("""
     <style>
     .main-header {
@@ -244,7 +296,9 @@ st.set_page_config(
 )
 
 def display_alerts(alerts):
-    """Display alerts using custom CSS classes"""
+    """
+    Renders health alerts into the Streamlit UI using color-coded CSS classes.
+    """
     st.subheader(f"Generated Alerts ({len(alerts)})")
     with st.expander("View Detailed Alerts", expanded=True):
         if not alerts:
@@ -260,6 +314,10 @@ def display_alerts(alerts):
 
 
 def main():
+    """
+    Entry point for the Streamlit application logic.
+    Manages state, file uploads, prediction execution, and visualization rendering.
+    """
     st.markdown('<div class="main-header">Air Quality Forecasting & Alert System</div>', 
                 unsafe_allow_html=True)
     
@@ -284,6 +342,7 @@ def main():
     st.sidebar.success(f"{sum(len(v) for v in models.values())} model files loaded")
     st.sidebar.markdown(f"**Pollutants:** {', '.join([m.upper() for m in models.keys()])}")
     
+    # Load and Display Alert Thresholds in Sidebar
     thresholds = load_alert_thresholds() 
     print(f"DEBUG: Value of 'thresholds' loaded in app.py: {thresholds}")
     st.sidebar.markdown("---")
@@ -324,7 +383,7 @@ def main():
         st.info("Upload raw dataset CSV to generate predictions.")
         return
 
-    # Load and process data
+    # Data Load and processing
     try:
         try:
             df_input = pd.read_csv(uploaded_file, sep=None, engine="python")
@@ -348,7 +407,7 @@ def main():
     with st.expander("View Raw Data Preview (First 10 Rows)", expanded=False):
         st.dataframe(df_input.head(10), use_container_width=True)
     
-    # Data metrics
+    # Dashboard data metrics
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Rows", len(df_input))
     col2.metric("Total Columns", len(df_input.columns))
@@ -478,6 +537,7 @@ def main():
                         except Exception as e:
                             st.error(f"Could not generate correlation matrix: {e}")
                 
+                # Data Export Section
                 st.markdown("---")
                 st.subheader("Download Results")
                 

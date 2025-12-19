@@ -1,11 +1,27 @@
+################################################################################
+# AIR QUALITY ALERT THRESHOLDS CONFIGURATION
+# 
+# This file defines the concentration limits used by the 'evaluate_alerts' 
+# function to categorize pollutant levels into severity tiers (Low, Medium, High).
+#
+# Logic:
+# - Low: Concentration is within safe/baseline limits.
+# - Medium: Concentration is elevated; requires monitoring.
+# - High: Concentration exceeds safety standards; triggers critical alerts.
+################################################################################
+
 thresholds:
+  # Carbon Monoxide (CO)
+  # Standard measurement typically in mg/m³
   co:
     low: 2.0
     medium: 4.0
-    high: 9.0
+    high: 9.0        # Based on typical 8-hour exposure limits
     unit: "mg/m³"
     description: "Carbon Monoxide"
   
+  # Nitrogen Dioxide (NO2)
+  # High levels are often associated with vehicle emissions and respiratory issues
   no2:
     low: 100
     medium: 200
@@ -13,6 +29,8 @@ thresholds:
     unit: "µg/m³"
     description: "Nitrogen Dioxide"
   
+  # Nitrogen Oxides (NOx)
+  # Represents the sum of NO and NO2
   nox:
     low: 150
     medium: 300
@@ -20,6 +38,8 @@ thresholds:
     unit: "µg/m³"
     description: "Nitrogen Oxides"
   
+  # Benzene
+  # A known carcinogen; thresholds are strictly enforced even at lower values
   benzene:
     low: 5.0
     medium: 10.0
