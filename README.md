@@ -205,7 +205,7 @@ python -m streamlit run src/dashboard/app.py
 
 ## Dashboard Usage
 
-1. Upload a CSV file containing raw air quality data (use the same format used for training).
+1. Upload a CSV file containing raw air quality data(At least a few hours data) (use the same format used for training).
 2. Click the **Generate Forecasts** (Predict) button.
 3. View predicted pollutant concentrations and severity-labeled alerts.
 4. Alerts are saved automatically to `outputs/alerts/`.
@@ -233,6 +233,7 @@ Notes:
 - Geospatial visualizations and mapping
 - Real-time ingestion (API/webhook) and streaming predictions
 - Authentication & role-based access for the dashboard
+- Adopting reinforcement learning with user query data
 
 ---
 
