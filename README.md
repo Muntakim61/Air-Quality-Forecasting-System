@@ -212,7 +212,8 @@ python -m streamlit run src/dashboard/app.py
 
 Notes:
 - Uploaded CSV must contain columns expected by the preprocessing pipeline (`Date`, `Time`, sensor columns, `T`, `RH`, etc.).
-- <img width="1125" height="57" alt="image" src="https://github.com/user-attachments/assets/c8a6a6c8-2dc6-4364-bb3f-e5f6587222fd" />
+- <img width="1152" height="175" alt="image" src="https://github.com/user-attachments/assets/e926af50-be9b-49b3-92b7-6fc3d1190b08" />
+
 
 - The dashboard imports the shared preprocessing functions from `src/data_preprocessing/` to ensure feature parity with training.
 
