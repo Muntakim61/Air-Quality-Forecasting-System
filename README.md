@@ -32,8 +32,8 @@ The system predicts the following air quality parameters:
 
 - CO
 - NO2
-- NOx
-- Benzene
+- NOx( N20 )
+- Benzene ( C6H6 )
 ---
 
 ## Project Structure
@@ -80,36 +80,34 @@ air_quality_project/
 ## System Workflow
 
 ```
-Raw Air Quality Data
-    |
-    v
-Data Processing (src/data_preprocessing/load_data.py,
-                 src/data_preprocessing/clean_data.py,
-                 src/data_preprocessing/feature_engineering.py)
-    |
-    v
-Processed Dataset
-    |
-    v
-Model Training & Evaluation (src/models/train_ensemble.py)
-    |
-    v
-Trained models saved to outputs/models/
-    |
-    v
-Streamlit Dashboard (src/dashboard/app.py)
-    |
-    v
-User uploads new CSV -> Click Predict
-    |
-    v
-Predictions generated using trained models
-    |
-    v
-Alerts evaluated using src/alerts/alert_manager.py and alerts.yaml
-    |
-    v
-Alerts saved to outputs/alerts/ and displayed in the UI
+                                            Raw Air Quality Data
+                                                   |
+                                                   v
+                                            Data Processing
+                                                   |
+                                                   v
+                                            Processed Dataset
+                                                   |
+                                                   v
+                           Model Training & Evaluation (src/models/train_ensemble.py)
+                                                   |
+                                                   v
+                                Trained models saved to outputs/models/
+                                                   |
+                                                   v
+                                Streamlit Dashboard (src/dashboard/app.py)
+                                                   |
+                                                   v
+                                  User uploads new CSV -> Click Predict
+                                                   |
+                                                   v
+                                Predictions generated using trained models
+                                                   |
+                                                   v
+                    Alerts evaluated using src/alerts/alert_manager.py and alerts.yaml
+                                                   |
+                                                   v
+                            Alerts saved to outputs/alerts/ and displayed in the UI
 ```
 
 ---
